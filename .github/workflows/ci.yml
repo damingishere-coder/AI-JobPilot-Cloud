@@ -170,6 +170,8 @@ jobs:
         shell: bash
         run: |
           docker run --rm \
+            --add-host api:127.0.0.1 \
+            --add-host web:127.0.0.1 \
             -e NGINX_SERVER_NAME=localhost \
             -e NGINX_CLIENT_MAX_BODY_SIZE=30m \
             -e NGINX_PROXY_READ_TIMEOUT=60s \

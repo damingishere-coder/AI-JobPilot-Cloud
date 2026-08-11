@@ -44,6 +44,12 @@ const forbiddenExtensions = [
 const forbiddenFileNames = new Set(["config.yaml", "cookie.json", "data.json"]);
 const migrationRoot = "src/main/resources/db";
 const migrationPrefix = "src/main/resources/db/migration/";
+const migrationDirectories = new Set([
+  migrationRoot,
+  `${migrationRoot}/migration`,
+  `${migrationRoot}/migration/postgresql`,
+  `${migrationRoot}/migration/sqlite`,
+]);
 
 function git(...args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
@@ -68,7 +74,7 @@ function violationFor(value) {
   const segments = lower.split("/");
   const forbiddenDirectory = segments.slice(0, -1).find((segment) => forbiddenDirectories.has(segment));
   if (forbiddenDirectory) {
-    if (lower === migrationRoot || lower === `${migrationRoot}/migration`) return null;
+    if (migrationDirectories.has(lower)) return null;
     if (lower.startsWith(migrationPrefix) && lower.endsWith(".sql")) return null;
     return `本地运行目录 ${forbiddenDirectory}/`;
   }
