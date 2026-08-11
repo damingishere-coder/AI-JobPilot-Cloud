@@ -1,0 +1,36 @@
+spring:
+  config:
+    activate:
+      on-profile: api
+  session:
+    store-type: redis
+    timeout: 12h
+    redis:
+      namespace: ai-jobpilot:session
+      repository-type: indexed
+      flush-mode: on-save
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+
+app:
+  role: api
+  auth:
+    hash-pepper: ${auth_hash_pepper:${AUTH_HASH_PEPPER:}}
+    terms-version: ${AUTH_TERMS_VERSION:2026-08-draft}
+    cookie-name: AJP_SESSION
+    secure-cookie: ${AUTH_COOKIE_SECURE:false}
+    normal-session-timeout: 12h
+    remembered-session-timeout: 30d
+    pre-auth-session-timeout: 10m
+    login-ip-limit: 10
+    login-email-limit: 5
+    login-ip-window: 1m
+    login-email-window: 15m
+    register-ip-limit: 5
+    register-ip-window: 1h
+    csrf-ip-limit: 30
+    csrf-ip-window: 1m
+server:
+  forward-headers-strategy: framework
+  port: ${SERVER_PORT:8888}

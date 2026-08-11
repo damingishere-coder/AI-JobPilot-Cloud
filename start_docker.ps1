@@ -1,3 +1,5 @@
+﻿param([switch]$NoOpen)
+
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -17,96 +19,73 @@ function Fail-WithHelp {
     exit 1
 }
 
-function Test-CommandExists {
-    param([string]$CommandName)
-    return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
+function New-RandomSecret {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
 }
 
-function Test-PortOpen {
-    param([int]$Port)
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
-        $ok = $async.AsyncWaitHandle.WaitOne(1000, $false)
-        if ($ok) {
-            $client.EndConnect($async)
+function Ensure-LocalSecrets {
+    param([string]$SecretDirectory)
+    New-Item -ItemType Directory -Force -Path $SecretDirectory | Out-Null
+    foreach ($name in @("db_owner_password", "db_app_password", "redis_password", "auth_hash_pepper")) {
+        $path = Join-Path $SecretDirectory $name
+        if (-not (Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -eq 0) {
+            Set-Content -LiteralPath $path -Value (New-RandomSecret) -Encoding Ascii -NoNewline
+            Write-Host "已生成本机 Secret：$name"
         }
-        $client.Close()
-        return $ok
-    } catch {
-        return $false
     }
 }
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$FrontendUrl = "http://localhost:6866"
+$FrontendUrl = "http://localhost:8080"
 
-Write-Section "投递牛马 Docker 一键启动器"
+Write-Section "投递牛马 Cloud Docker 一键启动器"
 Write-Host "项目目录：$ProjectRoot"
-Write-Host "唯一前台页面：$FrontendUrl"
+Write-Host "统一入口：$FrontendUrl"
 
-Write-Section "1. 检查 Docker"
-if (-not (Test-CommandExists "docker")) {
-    Fail-WithHelp "没有找到 docker 命令。" "请先安装并启动 Docker Desktop。安装成功后重新打开 PowerShell，执行 docker --version 应看到版本号。"
+if ($null -eq (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Fail-WithHelp "没有找到 docker 命令。" "请安装并启动 Docker Desktop，重新打开 PowerShell 后再试。"
 }
 
-try {
-    docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Fail-WithHelp "Docker 没有正常运行。" "请打开 Docker Desktop，等左下角显示 Docker Engine running 后再双击 start_docker.bat。"
-    }
-} catch {
-    Fail-WithHelp "Docker 没有正常运行。" "请打开 Docker Desktop，等它启动完成后再试。"
+$StrictPreference = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+docker info *> $null
+$DockerInfoExitCode = $LASTEXITCODE
+docker compose version *> $null
+$DockerComposeExitCode = $LASTEXITCODE
+$ErrorActionPreference = $StrictPreference
+if ($DockerInfoExitCode -ne 0 -or $DockerComposeExitCode -ne 0) {
+    Fail-WithHelp "Docker 或 Docker Compose 没有正常运行。" "请打开 Docker Desktop，等待 Docker Engine running 后重试。"
 }
 
-try {
-    docker compose version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Fail-WithHelp "Docker Compose 不可用。" "请升级 Docker Desktop。新版 Docker Desktop 会自带 docker compose。"
-    }
-} catch {
-    Fail-WithHelp "Docker Compose 不可用。" "请升级 Docker Desktop 后再试。"
-}
-Write-Host "Docker 检查通过。"
-
-Write-Section "2. 启动容器"
 Push-Location $ProjectRoot
 try {
-    Write-Host "正在执行：docker compose up -d --build"
-    Write-Host "第一次启动会下载镜像和依赖，可能需要几分钟。"
-    docker compose up -d --build
-    if ($LASTEXITCODE -ne 0) {
-        Fail-WithHelp "docker compose up -d --build 执行失败。" "请查看上方 Docker 报错。常见原因是网络下载失败、端口被占用或 Docker Desktop 未完全启动。"
-    }
+    Write-Section "1. 初始化本机 Secret"
+    Ensure-LocalSecrets (Join-Path $ProjectRoot ".secrets")
+
+    Write-Section "2. 校验并启动全部 Cloud 组件"
+    docker compose config --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Docker Compose 配置校验失败" }
+
+    docker compose up -d --build --wait --wait-timeout 600
+    if ($LASTEXITCODE -ne 0) { throw "Cloud 容器未在规定时间内全部就绪" }
+
+    $health = Invoke-RestMethod -Uri "$FrontendUrl/api/health" -TimeoutSec 10
+    if ($health.status -ne "UP") { throw "统一健康检查未返回 UP" }
+} catch {
+    Write-Host "启动失败：$($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "查看原因：在 $ProjectRoot 执行 docker compose ps 和 docker compose logs" -ForegroundColor Yellow
+    exit 1
 } finally {
     Pop-Location
 }
 
-Write-Section "3. 等待前台页面"
-$ready = $false
-for ($i = 1; $i -le 60; $i++) {
-    if (Test-PortOpen 6866) {
-        $ready = $true
-        break
-    }
-    Start-Sleep -Seconds 2
-    Write-Host "等待前端启动中... $i/60"
-}
-
-if (-not $ready) {
-    Write-Host "前端端口 6866 暂未监听，容器可能还在安装依赖。" -ForegroundColor Yellow
-    Write-Host "你可以稍等后打开：$FrontendUrl"
-    Write-Host "查看日志命令：docker compose logs -f frontend"
-} else {
-    Write-Host "前台页面已就绪：$FrontendUrl" -ForegroundColor Green
+Write-Section "3. 启动完成"
+Write-Host "统一入口：$FrontendUrl" -ForegroundColor Green
+Write-Host "健康检查：$FrontendUrl/api/health"
+Write-Host "查看日志：docker compose logs -f"
+Write-Host "停止服务：docker compose down"
+if (-not $NoOpen) {
     Start-Process $FrontendUrl
 }
-
-Write-Section "4. 后续怎么用"
-Write-Host "以后查看项目，只打开：$FrontendUrl"
-Write-Host "修改前端代码后，刷新这个页面即可看到。"
-Write-Host "修改后端 Java 代码后，容器会自动编译并触发后端重启，稍等片刻再刷新页面。"
-Write-Host "查看全部日志：docker compose logs -f"
-Write-Host "停止项目：docker compose down"
-
-exit 0

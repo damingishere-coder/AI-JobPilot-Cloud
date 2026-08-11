@@ -1,0 +1,10 @@
+spring:
+  config:
+    activate:
+      on-profile: test
+  flyway:
+    validate-on-migrate: true
+
+logging:
+  file:
+    name: ""

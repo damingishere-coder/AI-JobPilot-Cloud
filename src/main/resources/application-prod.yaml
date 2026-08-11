@@ -1,0 +1,23 @@
+spring:
+  config:
+    activate:
+      on-profile: prod
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+server:
+  shutdown: graceful
+  forward-headers-strategy: framework
+
+logging:
+  structured:
+    format:
+      console: ecs
+    json:
+      stacktrace:
+        root: first
+        max-length: 4096
+        max-throwable-depth: 20
+        include-common-frames: false
+  file:
+    name: ""
