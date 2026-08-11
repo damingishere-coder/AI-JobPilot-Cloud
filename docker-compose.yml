@@ -1,81 +1,235 @@
-services:
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: backend-dev
-    container_name: ai-jobpilot-cloud-backend
-    restart: unless-stopped
-    init: true
-    shm_size: "1gb"
-    working_dir: /workspace
-    command: >
-      bash -lc "chmod +x ./gradlew &&
-      (./gradlew --no-daemon classes --continuous >/tmp/get-jobs-gradle-watch.log 2>&1 &) &&
-      exec xvfb-run -a -s '-screen 0 1920x1080x24'
-      ./gradlew --no-daemon bootRun"
-    ports:
-      - "127.0.0.1:${BACKEND_PORT:-8888}:8888"
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      SERVER_PORT: ${SERVER_PORT:-8888}
-      APP_AUTO_OPEN_BROWSER: ${APP_AUTO_OPEN_BROWSER:-false}
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:sqlite:/workspace/db/getjobs.db}
-      LOGGING_FILE_NAME: ${LOGGING_FILE_NAME:-/workspace/logs/get-jobs.log}
-      APP_DATA_DIR: ${APP_DATA_DIR:-/workspace/data}
-      APP_OUTPUT_DIR: ${APP_OUTPUT_DIR:-/workspace/output}
-      APP_CACHE_DIR: ${APP_CACHE_DIR:-/workspace/target/cache}
-      APP_LOG_DIR: ${APP_LOG_DIR:-/workspace/logs}
-      APP_BROWSER_USER_DATA_DIR: ${APP_BROWSER_USER_DATA_DIR:-/workspace/chrome-profile}
-      SPRING_DEVTOOLS_RESTART_ENABLED: "true"
-      SPRING_DEVTOOLS_LIVERELOAD_ENABLED: "true"
-      JAVA_OPTS: ${JAVA_OPTS:--Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8}
-      GRADLE_USER_HOME: /root/.gradle
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      HUAWEI_API_KEY: ${HUAWEI_API_KEY:-}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      BASE_URL: ${BASE_URL:-}
-      API_KEY: ${API_KEY:-}
-      MODEL: ${MODEL:-}
-    volumes:
-      - .:/workspace
-      - gradle-cache:/root/.gradle
-      - backend-build:/workspace/build
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+name: ai-jobpilot-cloud
 
-  frontend:
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_jobpilot}
+      POSTGRES_USER: ${DB_MIGRATION_USERNAME:-jobpilot_owner}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_owner_password
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+      TZ: ${TZ:-Asia/Shanghai}
+    secrets:
+      - db_owner_password
+      - db_app_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init-app-role.sh:/docker-entrypoint-initdb.d/10-init-app-role.sh:ro
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "/usr/local/bin/start-redis.sh"]
+    secrets:
+      - redis_password
+    volumes:
+      - redis-data:/data
+      - ./docker/redis/start-redis.sh:/usr/local/bin/start-redis.sh:ro
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  migrate:
     build:
       context: .
       dockerfile: Dockerfile
-      target: frontend-dev
-    container_name: ai-jobpilot-cloud-frontend
-    init: true
-    working_dir: /workspace/front
-    command: >
-      bash -lc "pnpm install --frozen-lockfile &&
-      exec npx next dev -p 6866 -H 0.0.0.0"
-    ports:
-      - "127.0.0.1:${FRONTEND_PORT:-6866}:6866"
+      target: runtime
+    image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
+    pull_policy: never
+    restart: "no"
     environment:
+      SPRING_PROFILES_ACTIVE: cloud,migrate
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
+      DB_MIGRATION_USERNAME: ${DB_MIGRATION_USERNAME:-jobpilot_owner}
       TZ: ${TZ:-Asia/Shanghai}
-      NEXT_TELEMETRY_DISABLED: "1"
-      CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
-      NEXT_DEV_PROXY: "true"
-      API_BASE_URL: ${API_BASE_URL:-}
-      API_PROXY_TARGET: ${API_PROXY_TARGET:-http://backend:8888}
-    volumes:
-      - .:/workspace
-      - pnpm-store:/root/.local/share/pnpm/store
-      - front-node-modules:/workspace/front/node_modules
-      - front-next-cache:/workspace/front/.next
+    secrets:
+      - db_owner_password
+    networks:
+      - data
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
+    pull_policy: never
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    environment:
+      SPRING_PROFILES_ACTIVE: cloud,api,prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
+      REDIS_HOST: redis
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-2}
+      APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-local}
+      APP_STORAGE_LOCAL_ROOT: /var/lib/ai-jobpilot/private
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-ap-east-1}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PATH_STYLE_ACCESS: ${S3_PATH_STYLE_ACCESS:-false}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      JAVA_TOOL_OPTIONS: ${JAVA_OPTS:--XX:MaxRAMPercentage=75 -Dfile.encoding=UTF-8}
+      TZ: ${TZ:-Asia/Shanghai}
+    secrets:
+      - db_app_password
+      - redis_password
+    volumes:
+      - private-storage:/var/lib/ai-jobpilot/private
+    networks:
+      - edge
+      - data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "java", "-jar", "/app/health-probe.jar", "http://127.0.0.1:8888/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  ai-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
+    pull_policy: never
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    environment:
+      SPRING_PROFILES_ACTIVE: cloud,worker,prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
+      REDIS_HOST: redis
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-2}
+      APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-local}
+      APP_STORAGE_LOCAL_ROOT: /var/lib/ai-jobpilot/private
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-ap-east-1}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PATH_STYLE_ACCESS: ${S3_PATH_STYLE_ACCESS:-false}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      JAVA_TOOL_OPTIONS: ${JAVA_OPTS:--XX:MaxRAMPercentage=75 -Dfile.encoding=UTF-8}
+      TZ: ${TZ:-Asia/Shanghai}
+    secrets:
+      - db_app_password
+      - redis_password
+    volumes:
+      - private-storage:/var/lib/ai-jobpilot/private
+    networks:
+      - data
+      - worker-egress
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "java", "-jar", "/app/health-probe.jar", "http://127.0.0.1:8889/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    image: ai-jobpilot-cloud-web:${APP_IMAGE_TAG:-local}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      PORT: 6866
+      HOSTNAME: 0.0.0.0
+      TZ: ${TZ:-Asia/Shanghai}
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6866/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m
+      - /var/run:size=4m
+      - /tmp:size=16m
+      - /etc/nginx/conf.d:size=4m
+    ports:
+      - "127.0.0.1:${APP_HTTP_PORT:-8080}:8080"
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-30m}
+      NGINX_PROXY_READ_TIMEOUT: ${NGINX_PROXY_READ_TIMEOUT:-60s}
+      NGINX_AUTH_RATE: ${NGINX_AUTH_RATE:-10r/m}
+      NGINX_PLUGIN_RATE: ${NGINX_PLUGIN_RATE:-120r/m}
+    volumes:
+      - ./deploy/nginx/templates:/etc/nginx/templates:ro
+      - ./deploy/nginx/snippets:/etc/nginx/snippets:ro
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+secrets:
+  db_owner_password:
+    file: ./.secrets/db_owner_password
+  db_app_password:
+    file: ./.secrets/db_app_password
+  redis_password:
+    file: ./.secrets/redis_password
 
 volumes:
-  gradle-cache:
-  backend-build:
-  pnpm-store:
-  front-node-modules:
-  front-next-cache:
+  postgres-data:
+  redis-data:
+  private-storage:
+
+networks:
+  edge:
+  data:
+    internal: true
+  worker-egress:

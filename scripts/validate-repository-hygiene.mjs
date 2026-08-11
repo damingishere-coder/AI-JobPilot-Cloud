@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const forbiddenDirectories = new Set([
+  ".secrets",
+  "backups",
   "chrome-profile",
   "cv_uploads",
   "data",
@@ -112,7 +114,7 @@ function validateExampleSecrets() {
     const separator = line.indexOf("=");
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (/(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE)$/i.test(key) && value !== "") populated.push(key);
+    if (/(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE|ACCESS_KEY)/i.test(key) && value !== "") populated.push(key);
   }
 
   if (populated.length > 0) {
