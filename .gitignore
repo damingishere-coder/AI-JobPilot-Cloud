@@ -1,0 +1,115 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+config.yaml
+.git-rewrite
+### IntelliJ IDEA ###
+*.iws
+*.iml
+*.ipr
+.idea
+*.sh
+!start_docker.sh
+CLAUDE.md
+.claude
+nul
+
+# Playwright
+.playwright/
+ms-playwright/
+playwright-*
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+bin/
+!**/src/main/**/build/
+!**/src/test/**/build/
+### VS Code ###
+.vscode/
+data.json
+data/
+output/
+logs/
+src/main/java/boss/data.json
+merge_prs.log
+### Mac OS ###
+.DS_Store
+cookie.json
+.env
+.env.*
+!.env.example
+.env.local
+front/.env.local
+chromedriver
+*.jpg
+chrome-profile/
+**/chrome-profile/
+
+# Database files
+db/
+!src/main/resources/db/
+!src/main/resources/db/migration/
+!src/main/resources/db/migration/*.sql
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Frontend build output
+node_modules/
+dist/
+front/out/
+front/.next/
+front/node_modules/
+front/.turbo/
+front/.vercel/
+front/coverage/
+.pnpm-store/
+
+# Gradle cache
+.gradle/
+
+# Python / local tools
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs, temporary outputs, and user uploads
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+uploads/
+user_uploads/
+local_uploads/
+
+# Real resume / CV uploads
+resumes/
+**/resumes/
+resume_uploads/
+**/resume_uploads/
+cv_uploads/
+**/cv_uploads/
+
+# Privacy-sensitive screenshots from local environments
+doc/imgs/
+local_screenshots/
+private_screenshots/

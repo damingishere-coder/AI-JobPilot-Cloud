@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HOSTNAME: ai-jobpilot-ci
+      APP_AUTO_OPEN_BROWSER: "false"
+      APP_BROWSER_HEADLESS: "true"
+      APP_CACHE_DIR: /tmp/ai-jobpilot-ci/cache
+      APP_DATA_DIR: /tmp/ai-jobpilot-ci/data
+      APP_OUTPUT_DIR: /tmp/ai-jobpilot-ci/output
+      LOGGING_FILE_NAME: /tmp/ai-jobpilot-ci/logs/get-jobs.log
+      SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-ci/getjobs-ci.db
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Prepare CI directories and Gradle wrapper
+        run: |
+          mkdir -p "$APP_CACHE_DIR" "$APP_DATA_DIR" "$APP_OUTPUT_DIR" "$(dirname "$LOGGING_FILE_NAME")"
+          chmod +x ./gradlew
+
+      - name: Run backend tests
+        run: ./gradlew test --no-daemon --stacktrace
+
+      - name: Print failed JUnit reports
+        if: failure()
+        shell: bash
+        run: |
+          found_failure=false
+          for report in build/test-results/test/*.xml; do
+            if grep -Eq 'failures="[1-9]|errors="[1-9]' "$report"; then
+              found_failure=true
+              echo "::group::$report"
+              cat "$report"
+              echo "::endgroup::"
+            fi
+          done
+          if [[ "$found_failure" == "false" ]]; then
+            echo "No failed JUnit XML report was found."
+          fi
+
+      - name: Upload backend test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: |
+            build/reports/tests/test
+            build/test-results/test
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Build backend
+        run: ./gradlew build --no-daemon
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: front/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: front
+        run: pnpm install --frozen-lockfile
+
+      - name: Run frontend lint
+        working-directory: front
+        run: pnpm lint
+
+      - name: Build frontend
+        working-directory: front
+        run: pnpm build
+
+  chrome-extension:
+    name: Chrome Extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Validate manifest and referenced files
+        run: node scripts/validate-chrome-extension.mjs
+
+  docker-config:
+    name: Docker Configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Verify required Dockerfile stages
+        shell: bash
+        run: |
+          for stage in backend-dev frontend-dev frontend-build backend-build runtime; do
+            grep -Eq "^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]${stage}([[:space:]]|$)" Dockerfile || {
+              echo "Missing Dockerfile stage: ${stage}"
+              exit 1
+            }
+          done

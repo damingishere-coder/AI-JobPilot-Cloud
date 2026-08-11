@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "投递牛马 Chrome Bridge",
+  "version": "1.3.0",
+  "description": "Use the signed-in Chrome tabs to scan jobs and confirm deliveries for 投递牛马.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": [
+    "http://localhost:6866/*",
+    "http://127.0.0.1:6866/*",
+    "http://localhost:8888/*",
+    "http://127.0.0.1:8888/*",
+    "https://www.zhipin.com/*",
+    "https://*.zhipin.com/*",
+    "https://www.zhaopin.com/*",
+    "https://*.zhaopin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:6866/*", "http://127.0.0.1:6866/*"],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.zhipin.com/*", "https://*.zhipin.com/*"],
+      "js": [
+        "boss-selectors.js",
+        "boss-debug.js",
+        "boss-scan-support.js",
+        "boss-api-collector.js",
+        "boss-search-collector.js",
+        "boss-detail-collector.js",
+        "boss-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.zhaopin.com/*", "https://*.zhaopin.com/*"],
+      "js": ["zhilian-scan-support.js", "zhilian-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
