@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢你愿意帮助改进 AI JobPilot（投递牛马）。本项目涉及招聘平台页面、本地浏览器登录状态、个人简历和模型密钥，请在提交内容前优先保护隐私并遵守平台规则。
+感谢你愿意帮助改进 AI-JobPilot-Cloud（投递牛马 SaaS 云端版）。本项目涉及多用户求职数据、招聘平台页面、用户浏览器登录状态、个人简历和模型密钥，请在提交内容前优先保护隐私并遵守平台规则。
 
 ## 可以贡献什么
 
@@ -8,7 +8,7 @@
 
 - 可复现的 Bug 报告
 - 招聘平台页面改版后的适配修复
-- Windows 安装、启动和排错文档
+- Cloud 架构、API、数据库和安全文档
 - 前端交互和可访问性改进
 - 后端测试、性能和稳定性改进
 - 平台适配层、数据清洗和失败诊断
@@ -30,7 +30,7 @@
 4. 记录操作系统、Java、Node.js、浏览器版本和平台页面。
 5. 提供最小复现步骤、预期结果和实际结果。
 
-涉及安全问题时，不要在公开 Issue 中粘贴密钥、Cookie、账号或简历。请先阅读 [SECURITY.md](SECURITY.md)。
+涉及安全问题时，不要在公开 Issue 中粘贴密钥、Cookie、账号或简历。请先阅读 [Cloud 安全与隐私原则](CLOUD_SECURITY.md)。
 
 ## 本地开发
 
@@ -67,6 +67,12 @@ pnpm dev
 
 ## 提交前检查
 
+仓库卫生：
+
+```powershell
+node scripts/validate-repository-hygiene.mjs
+```
+
 后端：
 
 ```powershell
@@ -81,7 +87,7 @@ cd front
 pnpm lint
 ```
 
-修改 Chrome 扩展时，请至少完成：
+修改“投递牛马 Cloud Bridge”时，请至少完成：
 
 - 重新加载扩展
 - 验证消息来源校验仍然有效
@@ -95,31 +101,31 @@ pnpm lint
 
 ```text
 fix/boss-selector
-feat/platform-adapter
+feature/platform-adapter
 refactor/job-analysis
-Docs/windows-setup
+docs/cloud-api
 ```
 
-推荐提交信息格式：
+提交信息使用中文，格式为：
 
 ```text
-类型: 简短说明
+类型：简短说明
 ```
 
-常用类型：
+允许的类型：
 
-- `feat`：新增能力
-- `fix`：修复问题
-- `docs`：文档修改
-- `refactor`：不改变外部行为的重构
-- `test`：测试相关
-- `chore`：构建、依赖和维护工作
+- `新增`
+- `修复`
+- `优化`
+- `重构`
+- `文档`
+- `配置`
 
 示例：
 
 ```text
-fix: handle expired Boss login page
-Docs: clarify Chrome Bridge setup
+修复：处理 Boss 登录过期页面
+文档：补充 Cloud Bridge 调试说明
 ```
 
 ## Pull Request 要求
@@ -154,15 +160,15 @@ Docs: clarify Chrome Bridge setup
 
 ## 文档同步
 
-行为、配置、端口、环境要求或安全边界发生变化时，应同步更新相关文档：
+行为、配置、端口、环境要求或安全边界发生变化时，应同步更新对应 Cloud 文档：
 
-- `README.md` / `README.en.md`
-- `WINDOWS_SETUP.md`
-- `TASK_FLOW.md`
-- `ARCHITECTURE.md`
-- `SECURITY.md`
-- `ROADMAP.md`
-- `CHANGELOG.md`
+- `README.md`
+- `CLOUD_ARCHITECTURE.md`
+- `CLOUD_API_DESIGN.md`
+- `CLOUD_DATABASE_DESIGN.md`
+- `CLOUD_SECURITY.md`
+- `CLOUD_ROADMAP.md`
+- `CLOUD_MIGRATION_INVENTORY.md`
 
 ## License
 

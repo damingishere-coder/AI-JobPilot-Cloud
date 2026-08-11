@@ -1,63 +1,33 @@
-# AI JobPilot 文档中心
+# AI-JobPilot-Cloud 文档中心
 
-这里汇总 AI JobPilot 的使用、开发、架构、安全、版本发布和演示资料。当前部分历史文档仍位于仓库根目录或 `doc/`，后续会在不破坏链接的前提下逐步迁移。
+这里仅汇总“投递牛马 SaaS 云端版”的当前有效文档。项目目前处于开发迁移阶段，文档中的目标设计不代表对应能力已经上线。
 
-## 普通用户
-
-| 文档 | 内容 |
-| --- | --- |
-| [项目主页](../README.md) | 产品定位、能力、截图、快速开始与平台支持 |
-| [Windows 新手部署](../WINDOWS_SETUP.md) | Windows 安装、启动、验证和排错 |
-| [任务流程](../TASK_FLOW.md) | 从简历配置、岗位采集到人工确认的完整流程 |
-| [版本发布与下载](releases.md) | Release 产物、版本命名、SHA256 校验和发布边界 |
-| [安全说明](../SECURITY.md) | API Key、Cookie、简历、数据库与浏览器数据边界 |
-| [路线图](../ROADMAP.md) | 当前阶段、下一步和长期方向 |
-| [版本记录](../CHANGELOG.md) | 已发布与待发布变更 |
-
-## 贡献者
+## Cloud 设计与实施
 
 | 文档 | 内容 |
 | --- | --- |
-| [参与贡献](../CONTRIBUTING.md) | Bug、功能建议、提交规范与 PR 要求 |
-| [开发者本地启动](development/setup.md) | Java、Node、pnpm、后端、前端、扩展和测试 |
-| [系统架构](../ARCHITECTURE.md) | 模块职责、数据流与 SaaS 演进说明 |
-| [安全报告](../SECURITY.md#报告安全问题) | 如何在不公开敏感数据的情况下报告问题 |
-| [自动化安全检查](../SECURITY.md#自动化安全检查) | CodeQL、Dependabot、扩展校验和 Release 校验范围 |
+| [项目主页](../README.md) | 当前状态、产品边界、开发验证和文档导航 |
+| [总体架构](../CLOUD_ARCHITECTURE.md) | Cloud 模块、数据流、部署拓扑和浏览器插件边界 |
+| [API 设计](../CLOUD_API_DESIGN.md) | 第一版 API、鉴权、幂等、分页与错误模型 |
+| [数据库设计](../CLOUD_DATABASE_DESIGN.md) | PostgreSQL 目标模型、多用户隔离与迁移原则 |
+| [安全与隐私](../CLOUD_SECURITY.md) | 凭证、简历、日志、文件、插件和运维安全 |
+| [开发路线图](../CLOUD_ROADMAP.md) | 阶段 0-9、验收标准和发布门槛 |
+| [仓库初始化指南](../CLOUD_REPO_INIT.md) | 独立仓库来源、安全复制和初始化检查 |
+| [代码迁移清单](../CLOUD_MIGRATION_INVENTORY.md) | 直接复用、重构参考和退出 Cloud 的模块 |
+| [参与贡献](../CONTRIBUTING.md) | 分支、提交、测试、安全和 PR 要求 |
 
-## Demo 与测试资料
+## 自动化检查
 
-| 文档 | 内容 |
+| 检查 | 作用 |
 | --- | --- |
-| [Demo 说明](../demo/README.md) | 离线 Demo 模式规划与安全边界 |
-| [示例简历](../demo/sample-resume.md) | 完全虚构的求职档案 |
-| [示例岗位](../demo/sample-jobs.json) | 完全虚构的岗位数据 |
-| [示例分析](../demo/sample-analysis.json) | 完全虚构的 AI 匹配结果 |
+| `Repository Hygiene` | 拦截本地数据库、日志、浏览器 Profile、真实环境配置、私钥和已填充示例密钥 |
+| `CI` | 后端测试与构建、前端 lint/build、Chrome 扩展和 Docker 配置校验 |
+| `CodeQL` | Java/Kotlin 与 JavaScript/TypeScript 安全分析 |
+| `Release` | 构建 `AI-JobPilot-Cloud-*` 预览或标签发布产物并生成校验和 |
+| `Dependabot` | 定期检查后端、前端和 GitHub Actions 依赖更新 |
 
-> 当前 Demo 文件尚未自动接入应用，只用于展示、测试设计和后续功能开发。不要将其描述为已经上线的一键 Demo。
+## 历史文档说明
 
-## 平台与实验资料
+仓库根目录的旧 Windows、Docker、任务流、架构、路线图、英文 README，以及 `doc/` 下的历史方案仍作为迁移参考保留。本页不再链接这些本地单机版入口，避免把旧运行方式误认为 Cloud 已完成能力。
 
-| 文档 | 内容 |
-| --- | --- |
-| [Boss 搜索 API POC](../doc/BOSS_API_POC.md) | Boss 搜索 API 的手动验证和降级路径 |
-| [历史文档索引](../doc/文档索引.md) | 旧方案、实施记录和补充说明 |
-
-## 自动化工作流
-
-| 工作流 | 作用 |
-| --- | --- |
-| `CI` | 后端测试与构建、前端 lint 与构建、Chrome 扩展校验、Docker 配置校验 |
-| `CodeQL` | Java / Kotlin 与 JavaScript / TypeScript 安全分析 |
-| `Release` | 版本预览构建、标签发布、产物打包和 SHA256 校验 |
-| `Dependabot` | 每周检查后端、前端和 GitHub Actions 依赖更新 |
-
-## 维护原则
-
-新增文档时请遵循：
-
-1. 普通用户首先看到“如何安装、如何使用、当前限制”。
-2. 开发者细节放入 `docs/development/`。
-3. 历史方案和已废弃内容放入 `docs/archive/` 或现有历史目录。
-4. 不在文档、截图和示例中提交真实 Cookie、API Key、简历、账号和数据库。
-5. 移动文件前先更新仓库内所有链接，必要时保留迁移说明。
-6. README 保持产品入口作用，不重新堆回完整开发日志和内部验收清单。
+新增或修改文档时，应优先更新 Cloud 系列文档；不要在文档、截图或示例中提交真实 Cookie、API Key、账号、简历、数据库或本机路径。
