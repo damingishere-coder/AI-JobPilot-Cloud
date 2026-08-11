@@ -1,4 +1,5 @@
 import java.time.LocalDate
+import org.springframework.boot.gradle.tasks.bundling.BootJar
 import org.springframework.boot.gradle.tasks.run.BootRun
 
 plugins {
@@ -27,14 +28,21 @@ dependencies {
     // 受 BOM 管理的依赖（不写版本）
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
     implementation("org.apache.httpcomponents.client5:httpclient5-fluent")
     implementation("org.flywaydb:flyway-core")
+    implementation("org.flywaydb:flyway-database-postgresql")
+    implementation("io.micrometer:micrometer-registry-prometheus")
+    implementation(platform("software.amazon.awssdk:bom:2.31.77"))
+    implementation("software.amazon.awssdk:s3")
 
     // 不在 BOM 中的依赖（写版本）
     implementation("com.microsoft.playwright:playwright:1.51.0")
     implementation("com.baomidou:mybatis-plus-spring-boot3-starter:3.5.9")
     implementation("org.xerial:sqlite-jdbc:3.45.1.0")
+    runtimeOnly("org.postgresql:postgresql")
     // 代码生成器（MyBatis-Plus Generator + Freemarker 模板）
     implementation("com.baomidou:mybatis-plus-generator:3.5.9")
     implementation("org.freemarker:freemarker:2.3.32")
@@ -51,6 +59,8 @@ dependencies {
     testAnnotationProcessor("org.projectlombok:lombok:1.18.42")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("org.testcontainers:postgresql")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -71,6 +81,8 @@ springBoot {
 
 // 正确地配置 BootRun（注意类型是 BootRun）
 tasks.named<BootRun>("bootRun") {
+    // 本机开发暂时继续使用旧入口；Cloud 容器使用 bootJar 的独立入口。
+    mainClass.set("com.getjobs.GetJobsApplication")
     systemProperty("file.encoding", "UTF-8")
     systemProperty("sun.stdout.encoding", "UTF-8")
     systemProperty("sun.stderr.encoding", "UTF-8")
@@ -78,4 +90,8 @@ tasks.named<BootRun>("bootRun") {
     systemProperty("LOG_DATE", LocalDate.now().toString())
     // 可选：对齐端口
     // systemProperty("server.port", "8888")
+}
+
+tasks.named<BootJar>("bootJar") {
+    mainClass.set("com.getjobs.cloud.CloudApplication")
 }

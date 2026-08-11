@@ -1,0 +1,9 @@
+spring:
+  config:
+    activate:
+      on-profile: worker
+
+app:
+  role: worker
+server:
+  port: ${SERVER_PORT:8889}
