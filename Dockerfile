@@ -33,7 +33,8 @@ EXPOSE 6866
 
 FROM node:24.15.0-bookworm-slim AS frontend-build
 WORKDIR /workspace/front
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    CLOUD_LOGIN_REQUIRED=true
 RUN corepack enable && corepack prepare pnpm@10.20.0 --activate
 COPY front/package.json front/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile

@@ -28,7 +28,7 @@ function New-RandomSecret {
 function Ensure-LocalSecrets {
     param([string]$SecretDirectory)
     New-Item -ItemType Directory -Force -Path $SecretDirectory | Out-Null
-    foreach ($name in @("db_owner_password", "db_app_password", "redis_password")) {
+    foreach ($name in @("db_owner_password", "db_app_password", "redis_password", "auth_hash_pepper")) {
         $path = Join-Path $SecretDirectory $name
         if (-not (Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -eq 0) {
             Set-Content -LiteralPath $path -Value (New-RandomSecret) -Encoding Ascii -NoNewline

@@ -2,7 +2,7 @@
 
 AI-JobPilot-Cloud 是“投递牛马”的独立 SaaS 云端版仓库。目标是把账号、求职资料、岗位池、AI 匹配、投递清单和额度管理放到云端，同时由用户自己的浏览器插件完成招聘平台页面上的采集，以及用户明确确认后的投递操作。
 
-> **当前状态：第 2 轮云端基础设施已完成。** PostgreSQL、Redis、Cloud API/Worker、Nginx 和可观测底座已经可重复启动；多用户隔离、云端鉴权、业务表、真实 AI 队列和生产部署尚未完成，请勿直接用于生产 SaaS。
+> **当前状态：第 3 轮用户系统已完成。** Cloud 模式已经具备注册、登录、Redis Session、CSRF、角色拦截、安全审计和用户资料 RLS 隔离；简历、岗位、额度等业务表、真实 AI 队列和生产部署仍未完成，请勿直接用于生产 SaaS。
 
 ## 当前进度
 
@@ -10,7 +10,8 @@ AI-JobPilot-Cloud 是“投递牛马”的独立 SaaS 云端版仓库。目标�
 - 代码来源基线为 [AI-JobPilot@3de82dc](https://github.com/damingishere-coder/AI-JobPilot/commit/3de82dc24aea3f1d02b380dae68b4e72352ee753)，Cloud 首次初始化提交为 `61446dd`。
 - Java 21 后端、Next.js 前端、Chrome 扩展和旧 SQLite 源码继续保留，供后续按模块迁移和重构。
 - Cloud Docker 环境已包含 Nginx、Web、API、AI Worker、一次性 Flyway 迁移、PostgreSQL 16 和 Redis 7；默认只有 `127.0.0.1:8080` 对宿主机开放。
-- Cloud 进程使用隔离入口，不加载旧 Cookie、Playwright、SQLite 初始化和旧 Controller；本轮不创建 SaaS 业务表或实现真实 AI 消费。
+- Cloud 进程使用隔离入口，不加载旧 Cookie、Playwright、SQLite 初始化和旧 Controller；认证只在 Cloud API/Web 开启，Windows 旧本地入口继续按原方式运行。
+- Web 鉴权统一使用 Redis Session，不使用 JWT；PostgreSQL `user_profiles` 通过事务级用户上下文和 RLS 隔离。
 
 详细阶段和完成标准见 [Cloud 路线图](CLOUD_ROADMAP.md)，代码保留与退出边界见 [迁移清单](CLOUD_MIGRATION_INVENTORY.md)。
 
@@ -57,6 +58,7 @@ Cookie 保存、服务端 Playwright 登录投递等本地能力仍留在源码�
 
 # 前端，另开一个终端，默认 http://localhost:6866
 cd front
+$env:CLOUD_LOGIN_REQUIRED = "false"
 pnpm install --frozen-lockfile
 pnpm dev
 ```
@@ -73,6 +75,7 @@ node scripts/validate-repository-hygiene.mjs
 # 前端
 cd front
 pnpm lint
+pnpm test
 pnpm build
 cd ..
 
@@ -95,6 +98,7 @@ docker compose config --quiet
 | [仓库初始化指南](CLOUD_REPO_INIT.md) | 独立仓库来源、复制方式和安全检查 |
 | [代码迁移清单](CLOUD_MIGRATION_INVENTORY.md) | 复用、重构和退出 Cloud 的模块清单 |
 | [云端基础设施](CLOUD_INFRASTRUCTURE.md) | 第 2 轮拓扑、Profile、迁移、存储、健康与备份边界 |
+| [用户系统与隔离](CLOUD_USER_SYSTEM.md) | 第 3 轮注册登录、Redis Session、CSRF、锁定、审计与 RLS |
 | [Docker 启动指南](README_DOCKER.md) | 一键启动、探针、常用运维和故障排查 |
 | [参与贡献](CONTRIBUTING.md) | 分支、提交、测试、安全和 PR 要求 |
 

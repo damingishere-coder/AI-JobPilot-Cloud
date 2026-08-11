@@ -1,5 +1,10 @@
 limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=10r/m;
 limit_req_zone $binary_remote_addr zone=plugin_limit:10m rate=120r/m;
+limit_req_status 429;
+
+log_format cloud_json escape=json
+  '{"time":"$time_iso8601","request_id":"$request_id","method":"$request_method",'
+  '"path":"$uri","status":$status,"bytes":$body_bytes_sent,"request_time":$request_time}';
 
 server {
     listen 80;
@@ -12,6 +17,9 @@ server {
     http2 on;
     server_name app.example.com;
     server_tokens off;
+    access_log /dev/stdout cloud_json;
+    error_log /dev/stderr crit;
+    limit_req_log_level notice;
 
     ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;
@@ -40,6 +48,36 @@ server {
     }
 
     location ^~ /actuator/ { return 404; }
+
+    location = /api/auth/login {
+        limit_req zone=auth_limit burst=5 nodelay;
+        error_page 429 = @auth_rate_limited;
+        proxy_pass http://api:8888;
+        proxy_set_header Host app.example.com;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_hide_header X-Request-ID;
+    }
+
+    location = /api/auth/register {
+        limit_req zone=auth_limit burst=5 nodelay;
+        error_page 429 = @auth_rate_limited;
+        proxy_pass http://api:8888;
+        proxy_set_header Host app.example.com;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_hide_header X-Request-ID;
+    }
+
+    location @auth_rate_limited {
+        default_type application/json;
+        add_header Retry-After 60 always;
+        return 429 '{"success":false,"error":{"code":"RATE_LIMITED","message":"请求过于频繁，请稍后重试","retryable":true},"requestId":"$request_id"}';
+    }
 
     location /api/ {
         proxy_pass http://api:8888;

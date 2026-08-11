@@ -1,6 +1,6 @@
 # Cloud Docker 一键启动指南
 
-本指南对应第 2 轮云端基础设施。启动后只有 Nginx 绑定宿主机端口，默认入口为：
+本指南对应第 3 轮 Cloud 用户系统。启动后只有 Nginx 绑定宿主机端口，默认入口为：
 
 ```text
 http://localhost:8080
@@ -33,7 +33,7 @@ chmod +x start_docker.sh
 
 启动脚本会自动：
 
-1. 在被 Git 忽略的 `.secrets/` 中生成 PostgreSQL 迁移角色、应用角色和 Redis 的随机密码；
+1. 在被 Git 忽略的 `.secrets/` 中生成 PostgreSQL 迁移角色、应用角色、Redis 密码和认证 HMAC Pepper；
 2. 校验 Compose 配置并构建镜像；
 3. 等待 PostgreSQL、Redis 和一次性 Flyway 迁移完成；
 4. 启动 API、AI Worker、Web 和 Nginx，并等待全部健康；
@@ -51,9 +51,21 @@ chmod +x start_docker.sh
 | `ai-worker` | AI Worker 进程骨架；本轮不消费真实消息 | 无 |
 | `migrate` | 一次性 Flyway PostgreSQL 迁移 | 无 |
 | `postgres` | PostgreSQL 16，业务事实源 | 无 |
-| `redis` | Redis 7 + AOF，缓存/后续队列基础设施 | 无 |
+| `redis` | Redis 7 + AOF，保存 Web Session、认证限流计数及后续队列基础设施 | 无 |
 
-Redis 不是唯一业务事实源。本轮不实现 Session、绑定码、业务限流或 AI 队列消费，这些能力将在后续轮次接入。
+Redis 不是唯一业务事实源。用户账号和审计记录保存于 PostgreSQL；Redis Session 丢失会要求用户重新登录，但不会丢失账号数据。本轮仍不实现插件绑定码或 AI 队列消费。
+
+## 登录与 Session
+
+首次打开工作台会跳转到 `/login`，也可在 `/register` 注册。普通登录使用浏览器会话 Cookie，Redis 空闲过期时间为 12 小时；勾选“记住我”后 Cookie 和 Redis Session 均保持 30 天。Cookie 名为 `AJP_SESSION`，设置 `HttpOnly`、`SameSite=Lax` 和 `Path=/`，CSRF Token 只保存在页面内存并通过 `X-CSRF-TOKEN` 请求头发送。
+
+本机 HTTP 默认 `AUTH_COOKIE_SECURE=false`。正式 HTTPS 环境必须设置：
+
+```dotenv
+AUTH_COOKIE_SECURE=true
+```
+
+修改该值后需要重建或重启 API。生产环境还应使用部署平台 Secret 提供 `auth_hash_pepper`，不可写入 `.env`、Compose 文件或 Git。
 
 ## 健康检查
 
@@ -111,6 +123,8 @@ macOS / Linux：
 
 `deploy/nginx/https.conf.example` 展示了精确域名、80 跳转 443、TLS 1.2/1.3、HSTS 和证书挂载路径。上线前必须替换 `app.example.com`，由可信 CA 签发证书，并在部署平台使用 Secret/只读挂载提供证书。
 
+启用 HTTPS 时必须同时把 `AUTH_COOKIE_SECURE` 设置为 `true`。否则 Cookie 不满足正式环境安全要求；反过来，在本机纯 HTTP 下误设为 `true` 会导致浏览器不发送 Session Cookie，看起来像“登录后立刻掉线”。
+
 该示例不是生产部署脚本，本轮不会申请证书、配置真实域名或部署服务器。
 
 ## 排查启动失败
@@ -124,5 +138,8 @@ docker compose logs migrate postgres redis api ai-worker web nginx
 
 - `migrate` 以退出码 `0` 结束是正常现象；非零表示数据库迁移失败。
 - `api` 或 `ai-worker` 不就绪时，优先检查 PostgreSQL、Redis 和私有存储权限。
+- 登录页反复返回登录状态时，检查 Redis 是否健康、浏览器是否收到 `AJP_SESSION`，以及本机 HTTP 是否误设了 `AUTH_COOKIE_SECURE=true`。
+- 返回 `CSRF_INVALID` 时刷新页面后重试；前端只会对安全过滤器明确拒绝的请求自动刷新 CSRF Token 并重试一次。
+- 返回 `ACCOUNT_LOCKED` 时等待响应中的 `Retry-After`；连续失败锁定会从 15、30、60 分钟递增，最长 24 小时。
 - 8080 被占用时，可在本机未提交的 `.env` 中设置 `APP_HTTP_PORT=8081`，然后重新启动。
 - 不要把日志中的 Secret、Authorization、Cookie、Token、简历正文或完整 Prompt 发到公开 Issue。

@@ -42,6 +42,7 @@ const forbiddenExtensions = [
 ];
 
 const forbiddenFileNames = new Set(["config.yaml", "cookie.json", "data.json"]);
+const nonSecretExampleKeys = new Set(["AUTH_COOKIE_SECURE"]);
 const migrationRoot = "src/main/resources/db";
 const migrationPrefix = "src/main/resources/db/migration/";
 const migrationDirectories = new Set([
@@ -120,7 +121,13 @@ function validateExampleSecrets() {
     const separator = line.indexOf("=");
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (/(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE|ACCESS_KEY)/i.test(key) && value !== "") populated.push(key);
+    if (
+      !nonSecretExampleKeys.has(key) &&
+      /(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE|ACCESS_KEY)/i.test(key) &&
+      value !== ""
+    ) {
+      populated.push(key);
+    }
   }
 
   if (populated.length > 0) {

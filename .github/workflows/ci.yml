@@ -120,6 +120,10 @@ jobs:
         working-directory: front
         run: pnpm lint
 
+      - name: Run frontend tests
+        working-directory: front
+        run: pnpm test
+
       - name: Build frontend
         working-directory: front
         run: pnpm build
@@ -154,6 +158,7 @@ jobs:
           printf 'ci-owner-password' > .secrets/db_owner_password
           printf 'ci-app-password' > .secrets/db_app_password
           printf 'ci-redis-password' > .secrets/redis_password
+          printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
           docker compose config --quiet
 
       - name: Verify required Dockerfile stages
@@ -206,6 +211,7 @@ jobs:
           printf 'ci-owner-password' > .secrets/db_owner_password
           printf 'ci-app-password' > .secrets/db_app_password
           printf 'ci-redis-password' > .secrets/redis_password
+          printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
 
       - name: Build and start Cloud stack
         run: docker compose up -d --build --wait --wait-timeout 600
@@ -219,6 +225,26 @@ jobs:
           published_services="$(jq -r 'select(any(.Publishers[]?; .PublishedPort > 0)) | .Service' /tmp/cloud-compose-ps.json)"
           test "$published_services" = "nginx"
           test "$(docker compose port nginx 8080)" = "127.0.0.1:8080"
+
+      - name: Verify registration, session, CSRF and logout
+        shell: bash
+        run: |
+          base_url='http://127.0.0.1:8080'
+          cookie_jar='/tmp/ai-jobpilot-auth.cookies'
+          csrf_token="$(curl --fail --silent --cookie-jar "$cookie_jar" "$base_url/api/auth/csrf" | jq -r '.data.csrfToken')"
+          register_response="$(curl --fail --silent \
+            --cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+            -H 'Content-Type: application/json' -H "X-CSRF-TOKEN: $csrf_token" \
+            --data '{"email":"ci-auth@example.invalid","password":"CiSmokePassword!2026","acceptTerms":true}' \
+            "$base_url/api/auth/register")"
+          authenticated_csrf="$(jq -r '.data.csrfToken' <<< "$register_response")"
+          test "$(jq -r '.success' <<< "$register_response")" = 'true'
+          curl --fail --silent --cookie "$cookie_jar" "$base_url/api/me" | grep -q 'ci\*\*\*@example.invalid'
+          curl --fail --silent --cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+            -H "X-CSRF-TOKEN: $authenticated_csrf" -X POST "$base_url/api/auth/logout" \
+            | grep -q '"loggedOut":true'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --cookie "$cookie_jar" "$base_url/api/me")" = '401'
 
       - name: Print logs on failure
         if: failure()

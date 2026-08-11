@@ -79,6 +79,8 @@ services:
       SPRING_PROFILES_ACTIVE: cloud,api,prod
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
       REDIS_HOST: redis
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_TERMS_VERSION: ${AUTH_TERMS_VERSION:-2026-08-draft}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
       DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-2}
       APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-local}
@@ -94,6 +96,7 @@ services:
     secrets:
       - db_app_password
       - redis_password
+      - auth_hash_pepper
     volumes:
       - private-storage:/var/lib/ai-jobpilot/private
     networks:
@@ -222,6 +225,8 @@ secrets:
     file: ./.secrets/db_app_password
   redis_password:
     file: ./.secrets/redis_password
+  auth_hash_pepper:
+    file: ./.secrets/auth_hash_pepper
 
 volumes:
   postgres-data:
