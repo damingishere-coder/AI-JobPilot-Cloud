@@ -113,3 +113,13 @@ cv_uploads/
 doc/imgs/
 local_screenshots/
 private_screenshots/
+
+# Private keys, certificates, and local backups
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.bak
+*.dump

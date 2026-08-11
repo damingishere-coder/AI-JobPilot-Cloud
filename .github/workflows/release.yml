@@ -24,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      HOSTNAME: ai-jobpilot-release
+      HOSTNAME: ai-jobpilot-cloud-release
       APP_AUTO_OPEN_BROWSER: "false"
       APP_BROWSER_HEADLESS: "true"
-      APP_CACHE_DIR: /tmp/ai-jobpilot-release/cache
-      APP_DATA_DIR: /tmp/ai-jobpilot-release/data
-      APP_OUTPUT_DIR: /tmp/ai-jobpilot-release/output
-      LOGGING_FILE_NAME: /tmp/ai-jobpilot-release/logs/get-jobs.log
-      SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-release/getjobs-release.db
+      APP_CACHE_DIR: /tmp/ai-jobpilot-cloud-release/cache
+      APP_DATA_DIR: /tmp/ai-jobpilot-cloud-release/data
+      APP_OUTPUT_DIR: /tmp/ai-jobpilot-cloud-release/output
+      LOGGING_FILE_NAME: /tmp/ai-jobpilot-cloud-release/logs/get-jobs.log
+      SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-cloud-release/getjobs-release.db
 
     steps:
       - name: Checkout
@@ -108,20 +108,20 @@ jobs:
             exit 1
           fi
 
-          cp "$JAR_PATH" "dist/AI-JobPilot-${RELEASE_VERSION}.jar"
-          (cd chrome-extension && zip -qr "../dist/AI-JobPilot-${RELEASE_VERSION}-chrome-extension.zip" .)
-          (cd front/out && zip -qr "../../dist/AI-JobPilot-${RELEASE_VERSION}-frontend-static.zip" .)
-          git archive --format=zip --output="dist/AI-JobPilot-${RELEASE_VERSION}-source.zip" HEAD
+          cp "$JAR_PATH" "dist/AI-JobPilot-Cloud-${RELEASE_VERSION}.jar"
+          (cd chrome-extension && zip -qr "../dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-chrome-extension.zip" .)
+          (cd front/out && zip -qr "../../dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-frontend-static.zip" .)
+          git archive --format=zip --output="dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-source.zip" HEAD
 
           (
             cd dist
-            sha256sum AI-JobPilot-* > SHA256SUMS.txt
+            sha256sum AI-JobPilot-Cloud-* > SHA256SUMS.txt
           )
 
       - name: Upload preview artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AI-JobPilot-${{ env.RELEASE_VERSION }}
+          name: AI-JobPilot-Cloud-${{ env.RELEASE_VERSION }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -139,6 +139,6 @@ jobs:
 
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
-            --title "AI JobPilot ${GITHUB_REF_NAME}" \
+            --title "AI-JobPilot-Cloud ${GITHUB_REF_NAME}" \
             --generate-notes \
             "${EXTRA_ARGS[@]}"

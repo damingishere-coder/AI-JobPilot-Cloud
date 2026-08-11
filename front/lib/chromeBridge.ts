@@ -48,7 +48,7 @@ export function sendChromeBridgeMessage<T = unknown>(payload: Record<string, unk
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => {
       window.removeEventListener('message', onMessage)
-      resolve({ success: false, message: 'Chrome扩展未响应，请确认已加载 投递牛马 Chrome Bridge。' })
+      resolve({ success: false, message: 'Chrome扩展未响应，请确认已加载 投递牛马 Cloud Bridge。' })
     }, timeout)
 
     const onMessage = (event: MessageEvent) => {

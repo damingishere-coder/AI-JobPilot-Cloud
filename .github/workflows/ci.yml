@@ -11,19 +11,37 @@ permissions:
   contents: read
 
 jobs:
+  repository-hygiene:
+    name: Repository Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Reject local runtime data and populated secrets
+        run: node scripts/validate-repository-hygiene.mjs
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      HOSTNAME: ai-jobpilot-ci
+      HOSTNAME: ai-jobpilot-cloud-ci
       APP_AUTO_OPEN_BROWSER: "false"
       APP_BROWSER_HEADLESS: "true"
-      APP_CACHE_DIR: /tmp/ai-jobpilot-ci/cache
-      APP_DATA_DIR: /tmp/ai-jobpilot-ci/data
-      APP_OUTPUT_DIR: /tmp/ai-jobpilot-ci/output
-      LOGGING_FILE_NAME: /tmp/ai-jobpilot-ci/logs/get-jobs.log
-      SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-ci/getjobs-ci.db
+      APP_CACHE_DIR: /tmp/ai-jobpilot-cloud-ci/cache
+      APP_DATA_DIR: /tmp/ai-jobpilot-cloud-ci/data
+      APP_OUTPUT_DIR: /tmp/ai-jobpilot-cloud-ci/output
+      LOGGING_FILE_NAME: /tmp/ai-jobpilot-cloud-ci/logs/get-jobs.log
+      SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-cloud-ci/getjobs-ci.db
     steps:
       - name: Checkout
         uses: actions/checkout@v6

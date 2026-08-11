@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: backend-dev
-    container_name: get-jobs-backend
+    container_name: ai-jobpilot-cloud-backend
     restart: unless-stopped
     init: true
     shm_size: "1gb"
@@ -49,7 +49,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: frontend-dev
-    container_name: get-jobs-frontend
+    container_name: ai-jobpilot-cloud-frontend
     init: true
     working_dir: /workspace/front
     command: >
