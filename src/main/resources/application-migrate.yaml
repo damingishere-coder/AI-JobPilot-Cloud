@@ -1,0 +1,26 @@
+spring:
+  config:
+    activate:
+      on-profile: migrate
+  main:
+    web-application-type: none
+  datasource:
+    username: ${DB_MIGRATION_USERNAME:jobpilot_owner}
+    password: ${db_owner_password:${DB_MIGRATION_PASSWORD:}}
+    hikari:
+      maximum-pool-size: 2
+      minimum-idle: 0
+  flyway:
+    enabled: true
+    locations: classpath:db/migration/postgresql
+    default-schema: app
+    schemas: app
+    create-schemas: true
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    placeholders:
+      app_role: jobpilot_app
+
+app:
+  role: migrate

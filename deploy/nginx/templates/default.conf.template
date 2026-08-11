@@ -1,0 +1,83 @@
+limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=${NGINX_AUTH_RATE};
+limit_req_zone $binary_remote_addr zone=plugin_limit:10m rate=${NGINX_PLUGIN_RATE};
+
+log_format cloud_json escape=json
+  '{"time":"$time_iso8601","request_id":"$request_id","remote_addr":"$remote_addr",'
+  '"method":"$request_method","path":"$uri","status":$status,'
+  '"bytes":$body_bytes_sent,"request_time":$request_time}';
+
+server {
+    listen 8080;
+    server_name ${NGINX_SERVER_NAME};
+    server_tokens off;
+
+    access_log /dev/stdout cloud_json;
+    error_log /dev/stderr warn;
+
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+
+    add_header X-Request-ID $request_id always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'" always;
+
+    location = /nginx-health {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"UP","service":"nginx"}';
+    }
+
+    location = /livez {
+        proxy_pass http://api:8888/livez;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
+    location = /readyz {
+        proxy_pass http://api:8888/readyz;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
+    location = /api/health {
+        proxy_pass http://api:8888/readyz;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
+    location ^~ /actuator/ {
+        return 404;
+    }
+
+    location = /api/auth/login {
+        limit_req zone=auth_limit burst=5 nodelay;
+        proxy_pass http://api:8888;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout ${NGINX_PROXY_READ_TIMEOUT};
+    }
+
+    location ^~ /api/plugin/ {
+        limit_req zone=plugin_limit burst=30 nodelay;
+        proxy_pass http://api:8888;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout ${NGINX_PROXY_READ_TIMEOUT};
+    }
+
+    location /api/ {
+        proxy_pass http://api:8888;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout ${NGINX_PROXY_READ_TIMEOUT};
+    }
+
+    location / {
+        proxy_pass http://web:6866;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout ${NGINX_PROXY_READ_TIMEOUT};
+    }
+}

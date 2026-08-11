@@ -8,8 +8,8 @@ echo ===============================================
 echo 投递牛马 Docker 一键启动器
 echo ===============================================
 echo.
-echo 启动成功后，只需要打开这个前台页面：
-echo http://localhost:6866
+echo 启动成功后，只需要打开统一入口：
+echo http://localhost:8080
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%start_docker.ps1"

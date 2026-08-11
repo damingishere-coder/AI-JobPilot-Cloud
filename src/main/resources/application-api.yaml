@@ -1,0 +1,9 @@
+spring:
+  config:
+    activate:
+      on-profile: api
+
+app:
+  role: api
+server:
+  port: ${SERVER_PORT:8888}

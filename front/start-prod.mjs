@@ -74,6 +74,15 @@ function contentTypeFor(filePath) {
 }
 
 const server = http.createServer((req, res) => {
+  const requestUrl = new URL(req.url || '/', `http://${hostname}:${port}`);
+  if (requestUrl.pathname === '/healthz') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end('{"status":"UP","service":"web"}');
+    return;
+  }
   const filePath = resolveStaticFile(req.url);
   const exists = isReadableFile(filePath);
   res.writeHead(exists ? 200 : 404, {
