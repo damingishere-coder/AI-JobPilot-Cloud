@@ -102,7 +102,7 @@ Git/GitHub、README、`.gitignore`、`.dockerignore`、CI、CodeQL、Issue/PR �
 
 - 将运行配置分为 dev/test/prod，所有真实密钥通过环境或 Secret 注入。
 - 新建 PostgreSQL 连接、Cloud 专用 Flyway 空基线和集成测试容器。
-- 引入 Redis，用于 Session、绑定码、限流和 Redis Streams 队列。
+- 引入 Redis 基础设施，为后续 Session、绑定码、限流和 Redis Streams 队列预留连接；本阶段不提前实现业务消费者。
 - 把 API 与 AI Worker 设计为同代码库的两个独立进程/容器。
 - 配置 Next.js Web、Spring Boot API、Worker、PostgreSQL、Redis 的 Docker Compose。
 - Nginx 统一入口、HTTPS、安全头、上传大小和超时限制。
@@ -118,7 +118,7 @@ Spring Boot 配置和依赖、Flyway、Redis、Worker 启动器、Dockerfile/Com
 - 一条文档化命令能启动全部开发组件，健康检查正确区分存活和就绪。
 - PostgreSQL/Redis 不暴露公网，Nginx 是唯一入口。
 - Flyway 可在空 PostgreSQL 完成迁移，SQLite SQL 未被直接混用。
-- 停止 Redis 后业务事实不丢失，恢复后可重新投递未完成 AI 消息。
+- 停止 Redis 后业务事实不丢失；未完成 AI 消息重新投递随真实队列消费者在阶段 5 验收。
 - HTTPS、Secret 注入、日志脱敏、备份和恢复至少完成一次测试。
 
 ### 不做什么

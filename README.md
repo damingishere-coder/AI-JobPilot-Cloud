@@ -2,14 +2,15 @@
 
 AI-JobPilot-Cloud 是“投递牛马”的独立 SaaS 云端版仓库。目标是把账号、求职资料、岗位池、AI 匹配、投递清单和额度管理放到云端，同时由用户自己的浏览器插件完成招聘平台页面上的采集，以及用户明确确认后的投递操作。
 
-> **当前状态：开发迁移基线。** 多用户隔离、PostgreSQL、云端鉴权、任务队列和生产部署尚未完成，请勿把当前代码作为生产级 SaaS 直接部署。
+> **当前状态：第 2 轮云端基础设施已完成。** PostgreSQL、Redis、Cloud API/Worker、Nginx 和可观测底座已经可重复启动；多用户隔离、云端鉴权、业务表、真实 AI 队列和生产部署尚未完成，请勿直接用于生产 SaaS。
 
 ## 当前进度
 
 - Cloud 仓库已经使用独立 Git 历史，`origin` 只指向 [AI-JobPilot-Cloud](https://github.com/damingishere-coder/AI-JobPilot-Cloud)。
 - 代码来源基线为 [AI-JobPilot@3de82dc](https://github.com/damingishere-coder/AI-JobPilot/commit/3de82dc24aea3f1d02b380dae68b4e72352ee753)，Cloud 首次初始化提交为 `61446dd`。
-- Java 21 后端、Next.js 前端、Chrome 扩展和现有测试暂时保留，供后续按模块迁移和重构。
-- 当前仍使用 SQLite 和本地开发启动方式；PostgreSQL、Redis、云端会话与部署将在后续阶段建设。
+- Java 21 后端、Next.js 前端、Chrome 扩展和旧 SQLite 源码继续保留，供后续按模块迁移和重构。
+- Cloud Docker 环境已包含 Nginx、Web、API、AI Worker、一次性 Flyway 迁移、PostgreSQL 16 和 Redis 7；默认只有 `127.0.0.1:8080` 对宿主机开放。
+- Cloud 进程使用隔离入口，不加载旧 Cookie、Playwright、SQLite 初始化和旧 Controller；本轮不创建 SaaS 业务表或实现真实 AI 消费。
 
 详细阶段和完成标准见 [Cloud 路线图](CLOUD_ROADMAP.md)，代码保留与退出边界见 [迁移清单](CLOUD_MIGRATION_INVENTORY.md)。
 
@@ -29,14 +30,24 @@ AI-JobPilot-Cloud 是“投递牛马”的独立 SaaS 云端版仓库。目标�
 src/                 Java 21 / Spring Boot 后端迁移基线
 front/               Next.js 16 前端迁移基线
 chrome-extension/    用户浏览器执行器迁移基线
-scripts/             扩展与仓库卫生校验
+deploy/              Nginx HTTP/HTTPS 配置示例
+docker/              PostgreSQL、Redis 容器初始化脚本
+scripts/             备份恢复、扩展与仓库卫生校验
 ```
 
-本轮没有修改 REST API、数据库结构、端口、Chrome 权限或 Java 命名空间 `com.getjobs`。Cookie 保存、服务端 Playwright 登录投递等本地能力仍留在源码中供迁移评估，但不会进入最终 Cloud 服务。
+Cookie 保存、服务端 Playwright 登录投递等本地能力仍留在源码中供迁移评估，但 Cloud Boot Jar 从 `com.getjobs.cloud.CloudApplication` 启动，不扫描这些旧组件。
 
 ## 开发与验证
 
-环境要求：Java 21、Node.js 20.19 或更高版本、pnpm 10.20.0、Chrome；Docker Desktop 为可选项。
+推荐只安装 Docker Desktop，然后在项目根目录一键启动完整 Cloud 环境：
+
+```powershell
+.\start_docker.ps1
+```
+
+启动成功后访问 `http://localhost:8080`。完整说明、探针和备份恢复命令见 [Cloud Docker 一键启动指南](README_DOCKER.md)。
+
+如需运行保留的旧本地开发入口，环境要求为 Java 21、Node.js 20.19 或更高版本、pnpm 10.20.0 和 Chrome：
 
 启动当前开发基线：
 
@@ -83,6 +94,8 @@ docker compose config --quiet
 | [开发路线图](CLOUD_ROADMAP.md) | 阶段 0-9、验收标准与跨阶段门槛 |
 | [仓库初始化指南](CLOUD_REPO_INIT.md) | 独立仓库来源、复制方式和安全检查 |
 | [代码迁移清单](CLOUD_MIGRATION_INVENTORY.md) | 复用、重构和退出 Cloud 的模块清单 |
+| [云端基础设施](CLOUD_INFRASTRUCTURE.md) | 第 2 轮拓扑、Profile、迁移、存储、健康与备份边界 |
+| [Docker 启动指南](README_DOCKER.md) | 一键启动、探针、常用运维和故障排查 |
 | [参与贡献](CONTRIBUTING.md) | 分支、提交、测试、安全和 PR 要求 |
 
 原本地版的 Windows、Docker、任务流和历史 POC 文档仍保留在仓库中作为迁移参考，但不再作为 Cloud 的使用入口。
