@@ -13,8 +13,8 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        <title>投递牛马 - 投递牛马工作台</title>
-        <meta name="description" content="投递牛马本地求职助手，集中查看平台状态、待确认岗位和投递记录" />
+        <title>AI-JobPilot-Cloud｜投递牛马云端版</title>
+        <meta name="description" content="投递牛马 SaaS 云端版开发迁移基线，集中管理求职资料、岗位、AI 匹配与投递清单" />
         <link
           rel="icon"
           href="/toudi-niuma.svg"

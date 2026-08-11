@@ -499,11 +499,11 @@ export default function BossPage() {
       setBossLoginMessage(
         ready
           ? `Chrome扩展已连接。只有点击“开始扫描”时才会控制Boss页面。版本：${status.version || '旧版/未知'}`
-          : status.message || 'Chrome扩展未连接，请加载 投递牛马 Chrome Bridge。'
+          : status.message || 'Chrome扩展未连接，请加载 投递牛马 Cloud Bridge。'
       )
     } catch {
       setChromeBridgeReady(false)
-      setBossLoginMessage('Chrome扩展未连接，请加载 投递牛马 Chrome Bridge。')
+      setBossLoginMessage('Chrome扩展未连接，请加载 投递牛马 Cloud Bridge。')
     } finally {
       setCheckingLogin(false)
     }

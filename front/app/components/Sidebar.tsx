@@ -144,8 +144,8 @@ export default function Sidebar() {
         <div className="mb-4 flex items-center gap-3">
           <Image src="/toudi-niuma.svg" alt="投递牛马" width={44} height={44} className="h-11 w-11" priority />
           <div>
-            <h1 className="text-xl font-bold text-slate-950 dark:text-white">投递牛马</h1>
-            <p className="text-sm text-slate-500 dark:text-manatee">投递牛马工作台</p>
+            <h1 className="text-xl font-bold text-slate-950 dark:text-white">投递牛马 Cloud</h1>
+            <p className="text-sm text-slate-500 dark:text-manatee">SaaS 云端版开发基线</p>
           </div>
         </div>
 

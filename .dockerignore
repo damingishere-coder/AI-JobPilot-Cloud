@@ -12,7 +12,17 @@ output/
 data/
 db/
 *.db
+*.sqlite
+*.sqlite3
 *.log
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.bak
+*.dump
 
 .env
 .env.*
@@ -33,5 +43,20 @@ __pycache__/
 .venv/
 venv/
 *.pyc
+
+chrome-profile/
+**/chrome-profile/
+uploads/
+user_uploads/
+local_uploads/
+resumes/
+**/resumes/
+resume_uploads/
+**/resume_uploads/
+cv_uploads/
+**/cv_uploads/
+local_screenshots/
+private_screenshots/
+doc/imgs/
 
 src/main/resources/dist/

@@ -55,11 +55,11 @@ jobs:
         env:
           APP_AUTO_OPEN_BROWSER: "false"
           APP_BROWSER_HEADLESS: "true"
-          APP_CACHE_DIR: /tmp/ai-jobpilot-codeql/cache
-          APP_DATA_DIR: /tmp/ai-jobpilot-codeql/data
-          APP_OUTPUT_DIR: /tmp/ai-jobpilot-codeql/output
-          LOGGING_FILE_NAME: /tmp/ai-jobpilot-codeql/logs/get-jobs.log
-          SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-codeql/getjobs-codeql.db
+          APP_CACHE_DIR: /tmp/ai-jobpilot-cloud-codeql/cache
+          APP_DATA_DIR: /tmp/ai-jobpilot-cloud-codeql/data
+          APP_OUTPUT_DIR: /tmp/ai-jobpilot-cloud-codeql/output
+          LOGGING_FILE_NAME: /tmp/ai-jobpilot-cloud-codeql/logs/get-jobs.log
+          SPRING_DATASOURCE_URL: jdbc:sqlite:/tmp/ai-jobpilot-cloud-codeql/getjobs-codeql.db
         run: |
           mkdir -p "$APP_CACHE_DIR" "$APP_DATA_DIR" "$APP_OUTPUT_DIR" "$(dirname "$LOGGING_FILE_NAME")"
           chmod +x ./gradlew

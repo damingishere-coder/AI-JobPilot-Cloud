@@ -1,13 +1,13 @@
 spring:
   application:
-    name: toudi_niuma
+    name: ai-jobpilot-cloud
   profiles:
     active: dev
   info:
     app:
-      name: 投递牛马
+      name: AI-JobPilot-Cloud｜投递牛马云端版
       version: 0.0.1-SNAPSHOT
-      description: Local 投递牛马 workspace
+      description: AI-JobPilot-Cloud SaaS 开发迁移基线
   banner:
     charset: UTF-8
     location: classpath:banner.txt
