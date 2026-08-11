@@ -37,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "spring.flyway.schemas=app",
                 "spring.flyway.create-schemas=true",
                 "spring.flyway.placeholders.app_role=jobpilot_owner",
+                "app.auth.hash-pepper=integration-test-auth-pepper-32-bytes",
                 "spring.data.redis.connect-timeout=500ms",
                 "spring.data.redis.timeout=500ms"
         }

@@ -10,8 +10,11 @@ public final class SensitiveDataSanitizer {
     private static final String REDACTED = "[REDACTED]";
     private static final Pattern BEARER = Pattern.compile("(?i)\\bBearer\\s+[A-Za-z0-9._~+/-]+=*");
     private static final Pattern SECRET_PAIR = Pattern.compile(
-            "(?i)(\\b(?:authorization|cookie|password|passwd|token|api[_-]?key|access[_-]?key|secret|private[_-]?key)"
+            "(?i)(\\b(?:authorization|cookie|password|passwd|token|session|csrf|api[_-]?key|access[_-]?key|secret|private[_-]?key)"
                     + "\\b[\\\"']?\\s*[:=]\\s*[\\\"']?)([^\\s,;\\\"'}]+)"
+    );
+    private static final Pattern EMAIL = Pattern.compile(
+            "(?i)(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}(?![A-Z0-9.-])"
     );
 
     private SensitiveDataSanitizer() {
@@ -22,6 +25,7 @@ public final class SensitiveDataSanitizer {
             return value;
         }
         String withoutBearer = BEARER.matcher(value).replaceAll("Bearer " + REDACTED);
-        return SECRET_PAIR.matcher(withoutBearer).replaceAll("$1" + REDACTED);
+        String withoutSecrets = SECRET_PAIR.matcher(withoutBearer).replaceAll("$1" + REDACTED);
+        return EMAIL.matcher(withoutSecrets).replaceAll(REDACTED);
     }
 }

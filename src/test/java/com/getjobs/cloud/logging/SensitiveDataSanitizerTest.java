@@ -25,11 +25,12 @@ class SensitiveDataSanitizerTest {
     @Test
     void redactsQuotedJsonStyleFields() {
         String sanitized = SensitiveDataSanitizer.sanitize(
-                "{\"password\":\"json-secret\",\"access_key\":\"access-value\"}"
+                "{\"password\":\"json-secret\",\"access_key\":\"access-value\","
+                        + "\"csrf\":\"csrf-value\",\"email\":\"person@example.com\"}"
         );
 
         assertThat(sanitized)
-                .doesNotContain("json-secret", "access-value")
+                .doesNotContain("json-secret", "access-value", "csrf-value", "person@example.com")
                 .contains("\"password\":\"[REDACTED]\"")
                 .contains("\"access_key\":\"[REDACTED]\"");
     }
