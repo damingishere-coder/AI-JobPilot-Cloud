@@ -60,6 +60,29 @@ public class JobRepository {
         );
     }
 
+    /**
+     * Returns the subset of job IDs visible to the given user (RLS-gated).
+     * Used by batch analyze to validate ownership without leaking other users' IDs.
+     */
+    public List<UUID> findVisibleJobIds(UUID userId, List<UUID> jobIds) {
+        if (jobIds.isEmpty()) {
+            return List.of();
+        }
+        var parameters = new MapSqlParameterSource("userId", userId);
+        List<String> placeholders = new java.util.ArrayList<>();
+        for (int i = 0; i < jobIds.size(); i++) {
+            String paramName = "id" + i;
+            parameters.addValue(paramName, jobIds.get(i));
+            placeholders.add(":" + paramName);
+        }
+        return jdbc.query(
+                "SELECT id FROM app.job_posts WHERE user_id=:userId AND id IN (" +
+                        String.join(",", placeholders) + ")",
+                parameters,
+                (rs, row) -> rs.getObject("id", UUID.class)
+        );
+    }
+
     public Optional<JobModels.JobDetail> find(UUID userId, UUID id) {
         try {
             return Optional.ofNullable(jdbc.queryForObject(
@@ -94,6 +117,28 @@ public class JobRepository {
         if (query.capturedTo() != null) {
             sql.append(" AND source_captured_at<=:capturedTo");
             parameters.addValue("capturedTo", query.capturedTo());
+        }
+        if (query.matchDecision() != null || query.matchStatus() != null || query.minScore() != null) {
+            // Filters must only consider each job's latest match (created_at DESC, id DESC),
+            // otherwise an old APPLY record would shadow a newer SKIP decision.
+            sql.append(" AND EXISTS (SELECT 1 FROM app.job_matches m WHERE m.job_post_id=app.job_posts.id");
+            sql.append(" AND m.user_id=:userId");
+            sql.append(" AND m.id=(SELECT latest.id FROM app.job_matches latest");
+            sql.append(" WHERE latest.user_id=:userId AND latest.job_post_id=app.job_posts.id");
+            sql.append(" ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)");
+            if (query.matchDecision() != null) {
+                sql.append(" AND m.decision=:matchDecision");
+                parameters.addValue("matchDecision", query.matchDecision());
+            }
+            if (query.matchStatus() != null) {
+                sql.append(" AND m.status=:matchStatus");
+                parameters.addValue("matchStatus", query.matchStatus());
+            }
+            if (query.minScore() != null) {
+                sql.append(" AND m.score>=:minScore");
+                parameters.addValue("minScore", query.minScore());
+            }
+            sql.append(")");
         }
         return new SqlParts(sql.toString(), parameters);
     }

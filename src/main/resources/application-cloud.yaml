@@ -35,6 +35,16 @@ app:
     key: ${data_encryption_key:${APP_DATA_ENCRYPTION_KEY:}}
     key-id: ${APP_DATA_ENCRYPTION_KEY_ID:v1}
     allow-ephemeral-key: false
+  ai-match:
+    enabled: false
+    provider: openai
+    model: gpt-4.1-mini
+    base-url: https://api.openai.com/v1
+    prompt-version: v1
+    # api-key: intentionally absent from API profile — only Worker needs it
+    timeout:
+      connect: 10000
+      request: 90000
   storage:
     type: ${APP_STORAGE_TYPE:local}
     local-root: ${APP_STORAGE_LOCAL_ROOT:/var/lib/ai-jobpilot/private}

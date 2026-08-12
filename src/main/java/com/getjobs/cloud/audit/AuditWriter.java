@@ -28,7 +28,11 @@ public class AuditWriter {
             "RESUME_PARSE_FAILED",
             "RESUME_DELETE_REQUESTED",
             "RESUME_PURGED",
-            "PREFERENCE_UPDATED"
+            "PREFERENCE_UPDATED",
+            "JOB_ANALYSIS_REQUESTED",
+            "JOB_ANALYSIS_SUCCEEDED",
+            "JOB_ANALYSIS_FAILED",
+            "JOB_ANALYSIS_REUSED"
     );
 
     private final JdbcTemplate jdbc;

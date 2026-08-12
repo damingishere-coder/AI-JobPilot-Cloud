@@ -2,8 +2,26 @@ spring:
   config:
     activate:
       on-profile: worker
+    import: optional:configtree:/run/secrets/
 
 app:
   role: worker
+  ai-match:
+    enabled: true
+    api-key: ${ai_api_key:${AI_API_KEY:}}
+    provider: openai
+    model: gpt-4.1-mini
+    base-url: https://api.openai.com/v1
+    prompt-version: v1
+    stream-poll-delay: 2s
+    outbox-poll-delay: 10s
+    db-fallback-delay: 30s
+    lease-seconds: 600
+    max-attempts: 3
+    retry-base-delay-seconds: 5
+    retry-max-delay-seconds: 300
+    timeout:
+      connect: 10000
+      request: 90000
 server:
   port: ${SERVER_PORT:8889}

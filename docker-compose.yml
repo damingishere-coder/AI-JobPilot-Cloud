@@ -169,6 +169,7 @@ services:
       - db_app_password
       - redis_password
       - data_encryption_key
+      - ai_api_key
     volumes:
       - private-storage:/var/lib/ai-jobpilot/private
     networks:
@@ -254,6 +255,8 @@ secrets:
     file: ./.secrets/auth_hash_pepper
   data_encryption_key:
     file: ./.secrets/data_encryption_key
+  ai_api_key:
+    file: ./.secrets/ai_api_key
 
 volumes:
   postgres-data:

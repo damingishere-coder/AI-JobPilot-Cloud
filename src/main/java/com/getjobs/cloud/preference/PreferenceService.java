@@ -48,7 +48,6 @@ public class PreferenceService {
     }
 
     public PreferenceModels.PreferenceView update(UUID userId, PreferenceModels.UpdateRequest request) {
-        NormalizedPreference normalized = normalize(request);
         return inTenant(userId, () -> {
             preferences.lockUser(userId);
             PreferenceRecord current = preferences.findCurrent(userId, true).orElse(null);
@@ -60,6 +59,7 @@ public class PreferenceService {
                 throw conflict();
             }
             int nextVersion = current == null ? 1 : current.version() + 1;
+            NormalizedPreference normalized = normalize(request, current);
             if (current != null) {
                 preferences.clearCurrent(userId);
             }
@@ -67,7 +67,11 @@ public class PreferenceService {
         });
     }
 
-    private NormalizedPreference normalize(PreferenceModels.UpdateRequest request) {
+    private static final short DEFAULT_REVIEW = 60;
+    private static final short DEFAULT_PRIORITY = 65;
+    private static final short DEFAULT_APPLY = 75;
+
+    private NormalizedPreference normalize(PreferenceModels.UpdateRequest request, PreferenceRecord current) {
         if (request == null) {
             throw validation("body", "请求内容不能为空");
         }
@@ -98,10 +102,32 @@ public class PreferenceService {
         } catch (JsonProcessingException exception) {
             throw validation("extraFilters", "扩展筛选内容格式不正确");
         }
+        // Threshold inheritance: null in request inherits from current record;
+        // on first creation, use hard-coded defaults.
+        short review = threshold("reviewThreshold", request.reviewThreshold(),
+                current != null ? current.reviewThreshold() : DEFAULT_REVIEW);
+        short priority = threshold("priorityApplyThreshold", request.priorityApplyThreshold(),
+                current != null ? current.priorityApplyThreshold() : DEFAULT_PRIORITY);
+        short apply = threshold("applyThreshold", request.applyThreshold(),
+                current != null ? current.applyThreshold() : DEFAULT_APPLY);
+        if (review > priority || priority > apply) {
+            throw validation("reviewThreshold",
+                    "推荐阈值必须满足：查看 ≤ 优先投递 ≤ 普通投递，每个值在 0-100 之间");
+        }
         return new NormalizedPreference(
                 titles, cities, min, max, experience, degrees, industries, scales,
-                preferred, excluded, keywords, extra
+                preferred, excluded, keywords, extra, review, priority, apply
         );
+    }
+
+    private short threshold(String field, Integer value, short defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        if (value < 0 || value > 100) {
+            throw validation(field, "阈值必须在 0 到 100 之间");
+        }
+        return value.shortValue();
     }
 
     private List<String> normalizeList(String field, List<String> values, int min, int max, int itemMax) {
@@ -144,7 +170,8 @@ public class PreferenceService {
                 record.salaryMinK(), record.salaryMaxK(), record.experienceLevels(),
                 record.degreeLevels(), record.industries(), record.companyScales(),
                 record.preferredCompanies(), record.excludedCompanies(), record.excludedKeywords(),
-                record.extraFilters(), record.updatedAt()
+                record.extraFilters(), record.reviewThreshold(), record.priorityApplyThreshold(),
+                record.applyThreshold(), record.updatedAt()
         );
     }
 

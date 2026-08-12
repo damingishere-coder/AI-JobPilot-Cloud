@@ -3,7 +3,7 @@ package com.getjobs.cloud.resume;
 import java.time.Instant;
 import java.util.UUID;
 
-record ResumeRecord(
+public record ResumeRecord(
         UUID id,
         UUID userId,
         String originalFilename,

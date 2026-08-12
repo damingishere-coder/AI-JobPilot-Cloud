@@ -24,7 +24,7 @@ public class PreferenceRepository {
             id, user_id, version, target_titles::text, cities::text, salary_min_k, salary_max_k,
             experience_levels::text, degree_levels::text, industries::text, company_scales::text,
             preferred_companies::text, excluded_companies::text, excluded_keywords::text,
-            extra_filters::text, updated_at
+            extra_filters::text, review_threshold, priority_apply_threshold, apply_threshold, updated_at
             """;
 
     private final JdbcTemplate jdbc;
@@ -61,11 +61,12 @@ public class PreferenceRepository {
                 INSERT INTO app.job_preferences(
                     user_id, version, is_current, target_titles, cities, salary_min_k, salary_max_k,
                     experience_levels, degree_levels, industries, company_scales,
-                    preferred_companies, excluded_companies, excluded_keywords, extra_filters
+                    preferred_companies, excluded_companies, excluded_keywords, extra_filters,
+                    review_threshold, priority_apply_threshold, apply_threshold
                 ) VALUES (
                     ?, ?, true, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?, CAST(? AS jsonb),
                     CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb),
-                    CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb)
+                    CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), ?, ?, ?
                 )
                 RETURNING %s
                 """.formatted(COLUMNS),
@@ -83,7 +84,10 @@ public class PreferenceRepository {
                 json(value.preferredCompanies()),
                 json(value.excludedCompanies()),
                 json(value.excludedKeywords()),
-                json(value.extraFilters())
+                json(value.extraFilters()),
+                value.reviewThreshold(),
+                value.priorityApplyThreshold(),
+                value.applyThreshold()
         );
     }
 
@@ -104,6 +108,9 @@ public class PreferenceRepository {
                 strings(rs.getString("excluded_companies")),
                 strings(rs.getString("excluded_keywords")),
                 map(rs.getString("extra_filters")),
+                rs.getShort("review_threshold"),
+                rs.getShort("priority_apply_threshold"),
+                rs.getShort("apply_threshold"),
                 rs.getTimestamp("updated_at").toInstant()
         );
     }
@@ -132,7 +139,7 @@ public class PreferenceRepository {
         }
     }
 
-    record PreferenceRecord(
+    public record PreferenceRecord(
             UUID id,
             UUID userId,
             int version,
@@ -148,6 +155,9 @@ public class PreferenceRepository {
             List<String> excludedCompanies,
             List<String> excludedKeywords,
             Map<String, Object> extraFilters,
+            short reviewThreshold,
+            short priorityApplyThreshold,
+            short applyThreshold,
             Instant updatedAt
     ) {
     }
@@ -164,7 +174,10 @@ public class PreferenceRepository {
             List<String> preferredCompanies,
             List<String> excludedCompanies,
             List<String> excludedKeywords,
-            Map<String, Object> extraFilters
+            Map<String, Object> extraFilters,
+            short reviewThreshold,
+            short priorityApplyThreshold,
+            short applyThreshold
     ) {
     }
 }

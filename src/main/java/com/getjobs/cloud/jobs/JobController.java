@@ -35,11 +35,14 @@ public class JobController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant capturedFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant capturedTo,
-            @RequestParam(defaultValue = "lastSeenAt,desc") String sort
+            @RequestParam(defaultValue = "lastSeenAt,desc") String sort,
+            @RequestParam(required = false) String matchDecision,
+            @RequestParam(required = false) String matchStatus,
+            @RequestParam(required = false) Integer minScore
     ) {
         return ApiResponse.success(jobs.list(
                 currentUser.require().userId(), page, size, platform, status, keyword,
-                capturedFrom, capturedTo, sort
+                capturedFrom, capturedTo, sort, matchDecision, matchStatus, minScore
         ));
     }
 

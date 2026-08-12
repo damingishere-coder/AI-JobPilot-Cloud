@@ -1,5 +1,9 @@
 package com.getjobs.cloud.jobs;
 
+import com.getjobs.cloud.match.MatchModels;
+import com.getjobs.cloud.match.MatchRepository;
+import com.getjobs.cloud.match.MatchRepository.MatchRecord;
+import com.getjobs.cloud.match.MatchRepository.MatchSummaryRecord;
 import com.getjobs.cloud.tenant.TenantContextExecutor;
 import com.getjobs.cloud.web.ApiException;
 import com.getjobs.cloud.web.PageResult;
@@ -10,6 +14,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -21,6 +27,8 @@ import java.util.function.Supplier;
 public class JobService {
     private static final Set<String> PLATFORMS = Set.of("BOSS", "ZHILIAN", "LIEPIN", "JOB51");
     private static final Set<String> STATUSES = Set.of("ACTIVE", "EXPIRED", "REMOVED");
+    private static final Set<String> MATCH_DECISIONS = Set.of("APPLY", "REVIEW", "SKIP");
+    private static final Set<String> MATCH_STATUSES = Set.of("PENDING", "PROCESSING", "SUCCEEDED", "FAILED");
     private static final Map<String, String> SORT_COLUMNS = Map.of(
             "lastSeenAt", "last_seen_at",
             "createdAt", "created_at",
@@ -29,15 +37,18 @@ public class JobService {
     );
 
     private final JobRepository jobs;
+    private final MatchRepository matches;
     private final TenantContextExecutor tenants;
     private final TransactionTemplate transactions;
 
     public JobService(
             JobRepository jobs,
+            MatchRepository matches,
             TenantContextExecutor tenants,
             PlatformTransactionManager transactionManager
     ) {
         this.jobs = jobs;
+        this.matches = matches;
         this.tenants = tenants;
         this.transactions = new TransactionTemplate(transactionManager);
     }
@@ -51,12 +62,24 @@ public class JobService {
             String keyword,
             Instant capturedFrom,
             Instant capturedTo,
-            String sort
+            String sort,
+            String matchDecision,
+            String matchStatus,
+            Integer minScore
     ) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(100, size));
         String normalizedPlatform = controlled(platform, PLATFORMS, "platform");
         String normalizedStatus = controlled(status, STATUSES, "status");
+        String normalizedMatchDecision = controlled(matchDecision, MATCH_DECISIONS, "matchDecision");
+        String normalizedMatchStatus = controlled(matchStatus, MATCH_STATUSES, "matchStatus");
+        Integer safeMinScore = null;
+        if (minScore != null) {
+            if (minScore < 0 || minScore > 100) {
+                throw validation("minScore 必须在 0 到 100 之间");
+            }
+            safeMinScore = minScore;
+        }
         String normalizedKeyword = keyword == null ? null : keyword.trim();
         if (normalizedKeyword != null && normalizedKeyword.length() > 100) {
             throw validation("关键词不能超过 100 个字符");
@@ -72,18 +95,79 @@ public class JobService {
         }
         JobModels.Query query = new JobModels.Query(
                 safePage, safeSize, normalizedPlatform, normalizedStatus, normalizedKeyword,
-                capturedFrom, capturedTo, orderBy(sort)
+                capturedFrom, capturedTo, orderBy(sort),
+                normalizedMatchDecision, normalizedMatchStatus, safeMinScore
         );
         return inTenant(userId, () -> {
             long total = jobs.count(userId, query);
-            return PageResult.of(jobs.list(userId, query), safePage, safeSize, total);
+            List<JobModels.JobSummary> rawJobs = jobs.list(userId, query);
+            if (!rawJobs.isEmpty()) {
+                // Populate match summaries (latest per job)
+                List<UUID> jobIds = rawJobs.stream().map(JobModels.JobSummary::id).toList();
+                List<MatchSummaryRecord> matchRecords = matches.findLatestByJobIds(userId, jobIds);
+                Map<UUID, MatchModels.MatchSummary> byJobId = new LinkedHashMap<>();
+                for (MatchSummaryRecord r : matchRecords) {
+                    byJobId.put(r.jobPostId(), new MatchModels.MatchSummary(
+                            r.id(),
+                            r.score() == null ? null : r.score().intValue(),
+                            r.decision(),
+                            r.greeting(),
+                            r.status(),
+                            r.completedAt()
+                    ));
+                }
+                rawJobs = rawJobs.stream()
+                        .map(job -> new JobModels.JobSummary(
+                                job.id(), job.platform(), job.title(), job.companyName(),
+                                job.salary(), job.location(), job.status(),
+                                byJobId.get(job.id()),
+                                null, // deliveryTaskStatus — not yet implemented
+                                job.lastSeenAt()
+                        ))
+                        .toList();
+            }
+            return PageResult.of(rawJobs, safePage, safeSize, total);
         });
     }
 
     public JobModels.JobDetail detail(UUID userId, UUID jobId) {
-        return inTenant(userId, () -> jobs.find(userId, jobId).orElseThrow(() -> new ApiException(
-                HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "岗位不存在"
-        )));
+        return inTenant(userId, () -> {
+            JobModels.JobDetail detail = jobs.find(userId, jobId).orElseThrow(() -> new ApiException(
+                    HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "岗位不存在"
+            ));
+            // Get latest match for this job
+            MatchRecord matchRecord = matches.findLatestByJob(userId, jobId).orElse(null);
+            MatchModels.MatchView matchView = matchRecord == null ? null :
+                    new MatchModels.MatchView(
+                            matchRecord.id(), matchRecord.jobPostId(),
+                            matchRecord.resumeId(), matchRecord.preferenceId(),
+                            matchRecord.status(),
+                            matchRecord.score() == null ? null : matchRecord.score().intValue(),
+                            matchRecord.decision(), matchRecord.summary(),
+                            matchRecord.strengths(), matchRecord.risks(),
+                            matchRecord.greeting(), null,
+                            matchRecord.modelProvider() == null ? null :
+                                    new MatchModels.ModelInfo(matchRecord.modelProvider(),
+                                            matchRecord.modelName(), matchRecord.promptVersion()),
+                            matchRecord.inputTokens() == null ? null :
+                                    new MatchModels.UsageInfo(matchRecord.inputTokens(),
+                                            matchRecord.outputTokens(), matchRecord.durationMs()),
+                            matchRecord.errorCode() == null ? null :
+                                    new MatchModels.ErrorInfo(matchRecord.errorCode(),
+                                            matchRecord.errorMessage()),
+                            matchRecord.attemptCount(),
+                            matchRecord.createdAt(), matchRecord.completedAt()
+                    );
+            return new JobModels.JobDetail(
+                    detail.id(), detail.platform(), detail.externalJobId(),
+                    detail.title(), detail.companyName(), detail.salary(),
+                    detail.location(), detail.experience(), detail.degree(),
+                    detail.description(), detail.jobUrl(), detail.companyInfo(),
+                    detail.skills(), detail.welfare(), detail.status(),
+                    detail.capturedAt(), detail.lastSeenAt(),
+                    matchView, null // deliveryTask — not yet implemented
+            );
+        });
     }
 
     private String controlled(String value, Set<String> allowed, String field) {

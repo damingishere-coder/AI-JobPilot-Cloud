@@ -23,7 +23,10 @@ public final class PreferenceModels {
             List<String> preferredCompanies,
             List<String> excludedCompanies,
             List<String> excludedKeywords,
-            Map<String, Object> extraFilters
+            Map<String, Object> extraFilters,
+            Integer reviewThreshold,
+            Integer priorityApplyThreshold,
+            Integer applyThreshold
     ) {
     }
 
@@ -42,6 +45,9 @@ public final class PreferenceModels {
             List<String> excludedCompanies,
             List<String> excludedKeywords,
             Map<String, Object> extraFilters,
+            int reviewThreshold,
+            int priorityApplyThreshold,
+            int applyThreshold,
             Instant updatedAt
     ) {
     }

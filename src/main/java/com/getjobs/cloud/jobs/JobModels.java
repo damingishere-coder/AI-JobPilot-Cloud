@@ -1,5 +1,7 @@
 package com.getjobs.cloud.jobs;
 
+import com.getjobs.cloud.match.MatchModels;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -21,8 +23,8 @@ public final class JobModels {
             Salary salary,
             String location,
             String status,
-            Object latestMatchSummary,
-            Object deliveryTaskStatus,
+            MatchModels.MatchSummary latestMatchSummary,
+            MatchModels.DeliveryTaskStatus deliveryTaskStatus,
             Instant lastSeenAt
     ) {
     }
@@ -45,8 +47,8 @@ public final class JobModels {
             String status,
             Instant capturedAt,
             Instant lastSeenAt,
-            Object latestMatch,
-            Object deliveryTask
+            MatchModels.MatchView latestMatch,
+            MatchModels.DeliveryTaskPlaceholder deliveryTask
     ) {
     }
 
@@ -58,7 +60,10 @@ public final class JobModels {
             String keyword,
             Instant capturedFrom,
             Instant capturedTo,
-            String orderBy
+            String orderBy,
+            String matchDecision,
+            String matchStatus,
+            Integer minScore
     ) {
     }
 }

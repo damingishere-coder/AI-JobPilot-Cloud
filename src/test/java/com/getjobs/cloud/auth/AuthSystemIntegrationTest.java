@@ -26,6 +26,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,7 +47,10 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "app.auth.login-ip-limit=100",
                 "app.auth.login-email-limit=100",
                 "app.auth.register-ip-limit=100",
-                "app.auth.csrf-ip-limit=100"
+                "app.auth.csrf-ip-limit=100",
+                // Keep the API profile's scheduled outbox publisher away from the
+                // outbox rows asserted in this test: a long poll delay disables it.
+                "app.ai-match.outbox-poll-delay=365d"
         }
 )
 class AuthSystemIntegrationTest {
@@ -463,6 +467,301 @@ class AuthSystemIntegrationTest {
         assertThat(json(unsafeSort).at("/error/code").asText()).isEqualTo("VALIDATION_ERROR");
     }
 
+    @Test
+    void matchApiValidatesMissingAuthCsrfAndInputAndPreservesPreferenceThresholds() throws Exception {
+        // Step 1: Register user
+        BrowserSession browser = new BrowserSession();
+        HttpResponse<String> registration = browser.post(
+                "/api/auth/register",
+                """
+                {"email":"round5-match@example.com","password":"StrongPassword!2026","acceptTerms":true}
+                """,
+                browser.csrf()
+        );
+        assertThat(registration.statusCode()).isEqualTo(201);
+        String csrf = json(registration).at("/data/csrfToken").asText();
+        UUID userId = UUID.fromString(json(registration).at("/data/user/id").asText());
+
+        // Step 2: Missing auth → 401
+        BrowserSession noAuth = new BrowserSession();
+        HttpResponse<String> noAuthResp = noAuth.get("/api/jobs/" + UUID.randomUUID() + "/match");
+        assertThat(noAuthResp.statusCode()).isEqualTo(401);
+
+        // Step 3: Missing/faulty Idempotency-Key → 400
+        // Empty jobIds should also be 400 (validation)
+        HttpResponse<String> batchEmpty = browser.post(
+                "/api/jobs/batch-analyze",
+                "{\"jobIds\":[],\"force\":false}",
+                csrf
+        );
+        assertThat(batchEmpty.statusCode()).isEqualTo(400);
+        assertThat(json(batchEmpty).at("/error/code").asText()).isEqualTo("VALIDATION_ERROR");
+
+        // Step 4: No matching job → 404
+        HttpResponse<String> noMatch = browser.get("/api/jobs/" + UUID.randomUUID() + "/match");
+        assertThat(noMatch.statusCode()).isEqualTo(404);
+        assertThat(json(noMatch).at("/error/code").asText()).isEqualTo("MATCH_NOT_FOUND");
+
+        // Step 5: Setup test data for preference threshold test
+        UUID resumeId = UUID.randomUUID();
+        UUID preferenceId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO app.resumes(
+                    id, user_id, original_filename, storage_key, content_type, file_size,
+                    sha256, upload_idempotency_key_hash, encryption_key_id, is_current, parse_status
+                ) VALUES (?, ?, 'resume.txt', 'objects/test', 'text/plain', 2,
+                          repeat('a', 64), repeat('a', 64), 'v1', true, 'PARSED')
+                """, resumeId, userId);
+        jdbc.update("""
+                INSERT INTO app.job_preferences(id, user_id, version, target_titles,
+                    review_threshold, priority_apply_threshold, apply_threshold)
+                VALUES (?, ?, 1, '["Java工程师"]'::jsonb, 60, 65, 75)
+                """, preferenceId, userId);
+        jdbc.update("""
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('b', 64), 'Java后端工程师', 'A公司',
+                          'https://www.zhipin.com/job_detail/a.html', now(), now())
+                """, jobId, userId);
+
+        // Step 6: Verify preference threshold defaults
+        HttpResponse<String> pref = browser.get("/api/preferences");
+        assertThat(json(pref).at("/data/reviewThreshold").asInt()).isEqualTo(60);
+        assertThat(json(pref).at("/data/priorityApplyThreshold").asInt()).isEqualTo(65);
+        assertThat(json(pref).at("/data/applyThreshold").asInt()).isEqualTo(75);
+
+        // Step 7: Update preference — explicitly set one threshold, others inherit
+        HttpResponse<String> updatePref = browser.put(
+                "/api/preferences",
+                """
+                {
+                  "version": 1,
+                  "targetTitles": ["Java 开发"],
+                  "cities": [],
+                  "salaryMinK": 20,
+                  "salaryMaxK": 35,
+                  "experienceLevels": [],
+                  "degreeLevels": [],
+                  "industries": [],
+                  "companyScales": [],
+                  "preferredCompanies": [],
+                  "excludedCompanies": [],
+                  "excludedKeywords": [],
+                  "extraFilters": {},
+                  "reviewThreshold": 50,
+                  "applyThreshold": 80
+                }
+                """,
+                csrf
+        );
+        assertThat(updatePref.statusCode()).as(updatePref.body()).isEqualTo(200);
+        assertThat(json(updatePref).at("/data/reviewThreshold").asInt()).isEqualTo(50);
+        // priority should inherit from current (65), apply explicitly set to 80
+        // Check: 50 ≤ 65 ≤ 80 ✓
+        assertThat(json(updatePref).at("/data/priorityApplyThreshold").asInt()).isEqualTo(65);
+        assertThat(json(updatePref).at("/data/applyThreshold").asInt()).isEqualTo(80);
+    }
+
+    @Test
+    void matchApiEnqueuesReusesForceRequeuesAndFiltersByLatestMatch() throws Exception {
+        BrowserSession browser = new BrowserSession();
+        HttpResponse<String> registration = browser.post(
+                "/api/auth/register",
+                """
+                {"email":"round5-match-full@example.com","password":"StrongPassword!2026","acceptTerms":true}
+                """,
+                browser.csrf()
+        );
+        assertThat(registration.statusCode()).isEqualTo(201);
+        String csrf = json(registration).at("/data/csrfToken").asText();
+        UUID userId = UUID.fromString(json(registration).at("/data/user/id").asText());
+
+        UUID jobId = UUID.randomUUID();
+        UUID resumeId = UUID.randomUUID();
+        UUID preferenceId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('a', 64), 'Java后端工程师', 'A公司',
+                          'https://www.zhipin.com/job_detail/a.html', now(), now())
+                """, jobId, userId);
+
+        // No resume → 428
+        HttpResponse<String> noResume = browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "key-no-resume"));
+        assertThat(noResume.statusCode()).as(noResume.body()).isEqualTo(428);
+        assertThat(json(noResume).at("/error/code").asText()).isEqualTo("PRECONDITION_FAILED");
+
+        // Parsed current resume but no preference → 428
+        jdbc.update("""
+                INSERT INTO app.resumes(
+                    id, user_id, original_filename, storage_key, content_type, file_size,
+                    sha256, upload_idempotency_key_hash, encryption_key_id, is_current, parse_status
+                ) VALUES (?, ?, 'resume.txt', 'objects/test', 'text/plain', 2,
+                          repeat('a', 64), repeat('a', 64), 'v1', true, 'PARSED')
+                """, resumeId, userId);
+        HttpResponse<String> noPreference = browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "key-no-pref"));
+        assertThat(noPreference.statusCode()).as(noPreference.body()).isEqualTo(428);
+        assertThat(json(noPreference).at("/error/code").asText()).isEqualTo("PRECONDITION_FAILED");
+
+        jdbc.update("""
+                INSERT INTO app.job_preferences(id, user_id, version, target_titles,
+                    review_threshold, priority_apply_threshold, apply_threshold)
+                VALUES (?, ?, 1, '["Java工程师"]'::jsonb, 60, 65, 75)
+                """, preferenceId, userId);
+
+        // Missing CSRF → 403
+        assertThat(browser.post("/api/jobs/" + jobId + "/analyze", "{}", null).statusCode())
+                .isEqualTo(403);
+
+        // Missing / blank / too-long Idempotency-Key → 400
+        assertThat(browser.post("/api/jobs/" + jobId + "/analyze", "{}", csrf).statusCode())
+                .isEqualTo(400);
+        assertThat(browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "   ")
+        ).statusCode()).isEqualTo(400);
+        assertThat(browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "k".repeat(129))
+        ).statusCode()).isEqualTo(400);
+
+        // Cross-user job: analyze → 404 without leaking, GET match → 404 MATCH_NOT_FOUND
+        UUID otherUser = UUID.randomUUID();
+        UUID otherJob = UUID.randomUUID();
+        jdbc.update("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                "(?, 'round5-match-other@example.com', '$argon2id$test')", otherUser);
+        jdbc.update("""
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('b', 64), '不可见岗位', 'B公司',
+                          'https://www.zhipin.com/job_detail/b.html', now(), now())
+                """, otherJob, otherUser);
+        HttpResponse<String> foreignAnalyze = browser.postWithHeaders(
+                "/api/jobs/" + otherJob + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "key-foreign"));
+        assertThat(foreignAnalyze.statusCode()).isEqualTo(404);
+        assertThat(json(foreignAnalyze).at("/error/code").asText()).isEqualTo("RESOURCE_NOT_FOUND");
+        HttpResponse<String> foreignMatch = browser.get("/api/jobs/" + otherJob + "/match");
+        assertThat(foreignMatch.statusCode()).isEqualTo(404);
+        assertThat(json(foreignMatch).at("/error/code").asText()).isEqualTo("MATCH_NOT_FOUND");
+        assertThat(foreignMatch.body()).doesNotContain(otherJob.toString());
+
+        // First successful analyze: exactly one Match + one REQUESTED outbox
+        HttpResponse<String> first = browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "key-first"));
+        assertThat(first.statusCode()).as(first.body()).isEqualTo(200);
+        UUID matchId = UUID.fromString(json(first).at("/data/matchId").asText());
+        assertThat(json(first).at("/data/status").asText()).isEqualTo("PENDING");
+        assertThat(json(first).at("/data/reusedExisting").asBoolean()).isFalse();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_matches WHERE user_id=? AND job_post_id=?",
+                Long.class, userId, jobId
+        )).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_match_outbox WHERE job_match_id=?",
+                Long.class, matchId
+        )).isEqualTo(1);
+
+        // Repeating the same input reuses the same matchId and adds nothing
+        HttpResponse<String> repeated = browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{}", csrf,
+                Map.of("Idempotency-Key", "key-repeat"));
+        assertThat(repeated.statusCode()).as(repeated.body()).isEqualTo(200);
+        assertThat(json(repeated).at("/data/matchId").asText()).isEqualTo(matchId.toString());
+        assertThat(json(repeated).at("/data/reusedExisting").asBoolean()).isTrue();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_matches WHERE user_id=? AND job_post_id=?",
+                Long.class, userId, jobId
+        )).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_match_outbox WHERE job_match_id=?",
+                Long.class, matchId
+        )).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.audit_logs WHERE action='JOB_ANALYSIS_REUSED' AND target_id=?::uuid",
+                Long.class, matchId
+        )).isEqualTo(1);
+
+        // FAILED + force=true: same matchId back to PENDING + one more REQUESTED outbox
+        jdbc.update("UPDATE app.job_matches SET status='FAILED' WHERE id=?", matchId);
+        HttpResponse<String> forced = browser.postWithHeaders(
+                "/api/jobs/" + jobId + "/analyze", "{\"force\":true}", csrf,
+                Map.of("Idempotency-Key", "key-force"));
+        assertThat(forced.statusCode()).as(forced.body()).isEqualTo(200);
+        assertThat(json(forced).at("/data/matchId").asText()).isEqualTo(matchId.toString());
+        assertThat(json(forced).at("/data/status").asText()).isEqualTo("PENDING");
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM app.job_matches WHERE id=?", String.class, matchId
+        )).isEqualTo("PENDING");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_matches WHERE user_id=? AND job_post_id=?",
+                Long.class, userId, jobId
+        )).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM app.job_match_outbox WHERE job_match_id=? AND event_type='JOB_ANALYSIS_REQUESTED'",
+                Long.class, matchId
+        )).isEqualTo(2);
+
+        // GET match returns an explicit status
+        HttpResponse<String> matchView = browser.get("/api/jobs/" + jobId + "/match");
+        assertThat(matchView.statusCode()).as(matchView.body()).isEqualTo(200);
+        assertThat(json(matchView).at("/data/status").asText()).isEqualTo("PENDING");
+        assertThat(json(matchView).at("/data/score").isNull()).isTrue();
+
+        // Latest-match filtering: an old APPLY/high-score record must never shadow
+        // the newer SKIP/low-score record for the same job.
+        UUID filterJob = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('f', 64), '筛选岗位', '筛选公司',
+                          'https://www.zhipin.com/job_detail/f.html', now(), now())
+                """, filterJob, userId);
+        jdbc.update("""
+                INSERT INTO app.job_matches(
+                    id, user_id, job_post_id, resume_id, preference_id, status,
+                    input_fingerprint, score, decision, created_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, 'SUCCEEDED', repeat('c', 64), 90, 'APPLY',
+                          now() - interval '1 hour', now())
+                """, UUID.randomUUID(), userId, filterJob, resumeId, preferenceId);
+        jdbc.update("""
+                INSERT INTO app.job_matches(
+                    id, user_id, job_post_id, resume_id, preference_id, status,
+                    input_fingerprint, score, decision, created_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, 'SUCCEEDED', repeat('d', 64), 30, 'SKIP',
+                          now(), now())
+                """, UUID.randomUUID(), userId, filterJob, resumeId, preferenceId);
+
+        // APPLY must not match (latest is SKIP); SKIP must match
+        assertThat(jobIdsInList(browser, "matchDecision=APPLY")).doesNotContain(filterJob);
+        assertThat(jobIdsInList(browser, "matchDecision=SKIP")).contains(filterJob);
+        // minScore is evaluated against the latest record (30), not the old one (90)
+        assertThat(jobIdsInList(browser, "minScore=80")).doesNotContain(filterJob);
+        assertThat(jobIdsInList(browser, "minScore=20")).contains(filterJob);
+        // matchStatus sees the latest status
+        assertThat(jobIdsInList(browser, "matchStatus=SUCCEEDED")).contains(filterJob);
+    }
+
+    private java.util.List<UUID> jobIdsInList(BrowserSession browser, String query) throws Exception {
+        HttpResponse<String> response = browser.get("/api/jobs?" + query);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        java.util.List<UUID> ids = new java.util.ArrayList<>();
+        for (JsonNode item : json(response).at("/data/items")) {
+            ids.add(UUID.fromString(item.at("/id").asText()));
+        }
+        return ids;
+    }
+
     private String preferenceRequest(Integer version) {
         return """
                 {
@@ -521,13 +820,24 @@ class AuthSystemIntegrationTest {
             return sendWithBody("PUT", path, body, csrfToken);
         }
 
+        HttpResponse<String> postWithHeaders(String path, String body, String csrfToken,
+                                              Map<String, String> extraHeaders) throws Exception {
+            return sendWithBodyAndHeaders("POST", path, body, csrfToken, extraHeaders);
+        }
+
         private HttpResponse<String> sendWithBody(String method, String path, String body, String csrfToken) throws Exception {
+            return sendWithBodyAndHeaders(method, path, body, csrfToken, Map.of());
+        }
+
+        private HttpResponse<String> sendWithBodyAndHeaders(String method, String path, String body,
+                                                             String csrfToken, Map<String, String> extraHeaders) throws Exception {
             HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                     .header("Content-Type", "application/json")
                     .method(method, HttpRequest.BodyPublishers.ofString(body));
             if (csrfToken != null) {
                 builder.header("X-CSRF-TOKEN", csrfToken);
             }
+            extraHeaders.forEach(builder::header);
             return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
         }
 
