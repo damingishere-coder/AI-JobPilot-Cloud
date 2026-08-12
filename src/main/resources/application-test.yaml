@@ -5,6 +5,17 @@ spring:
   flyway:
     validate-on-migrate: true
 
+app:
+  data-encryption:
+    allow-ephemeral-key: true
+  clamav:
+    enabled: false
+
 logging:
   file:
     name: ""
+
+management:
+  endpoint:
+    health:
+      validate-group-membership: false

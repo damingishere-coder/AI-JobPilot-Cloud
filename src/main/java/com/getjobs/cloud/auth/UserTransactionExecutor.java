@@ -1,9 +1,8 @@
 package com.getjobs.cloud.auth;
 
+import com.getjobs.cloud.tenant.TenantContextExecutor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -15,21 +14,17 @@ import java.util.function.Supplier;
 @Component
 @Profile("api")
 public class UserTransactionExecutor {
-    private final UserRepository users;
+    private final TenantContextExecutor tenants;
 
-    public UserTransactionExecutor(UserRepository users) {
-        this.users = users;
+    public UserTransactionExecutor(TenantContextExecutor tenants) {
+        this.tenants = tenants;
     }
 
-    @Transactional(propagation = Propagation.MANDATORY)
     public <T> T execute(UUID userId, Supplier<T> work) {
-        users.setTenantContext(userId);
-        return work.get();
+        return tenants.execute(userId, work);
     }
 
-    @Transactional(propagation = Propagation.MANDATORY)
     public void execute(UUID userId, Runnable work) {
-        users.setTenantContext(userId);
-        work.run();
+        tenants.execute(userId, work);
     }
 }
