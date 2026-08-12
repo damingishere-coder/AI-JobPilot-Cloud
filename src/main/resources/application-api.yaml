@@ -41,6 +41,25 @@ app:
     register-ip-window: 1h
     csrf-ip-limit: 30
     csrf-ip-window: 1m
+  plugin:
+    bind-code-ttl: ${PLUGIN_BIND_CODE_TTL:5m}
+    max-active-bind-codes: ${PLUGIN_MAX_ACTIVE_BIND_CODES:3}
+    token-ttl: ${PLUGIN_TOKEN_TTL:90d}
+    token-prefix: ajp_plg_
+    max-devices-per-user: ${PLUGIN_MAX_DEVICES_PER_USER:10}
+    min-extension-version: ${PLUGIN_MIN_EXTENSION_VERSION:}
+    bind-ip-limit: 20
+    bind-ip-window: 10m
+    bind-code-attempt-limit: 5
+    last-seen-update-interval-seconds: 60
+  delivery:
+    lease-seconds: ${DELIVERY_LEASE_SECONDS:600}
+    max-attempts: ${DELIVERY_MAX_ATTEMPTS:3}
+    pending-default-limit: 10
+    pending-max-limit: 20
+    poll-after-seconds: 10
+    greeting-max-code-points: 60
+    lease-sweep-delay: 60s
 server:
   max-http-request-header-size: 32KB
   forward-headers-strategy: framework

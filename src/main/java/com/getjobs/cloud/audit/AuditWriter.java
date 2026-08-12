@@ -32,7 +32,18 @@ public class AuditWriter {
             "JOB_ANALYSIS_REQUESTED",
             "JOB_ANALYSIS_SUCCEEDED",
             "JOB_ANALYSIS_FAILED",
-            "JOB_ANALYSIS_REUSED"
+            "JOB_ANALYSIS_REUSED",
+            "PLUGIN_BIND_CODE_CREATED",
+            "PLUGIN_DEVICE_BOUND",
+            "PLUGIN_DEVICE_REVOKED",
+            "DELIVERY_TASK_CREATED",
+            "DELIVERY_TASK_CONFIRMED",
+            "DELIVERY_GREETING_UPDATED",
+            "DELIVERY_TASK_SKIPPED",
+            "PLUGIN_TASK_STARTED",
+            "PLUGIN_TASK_SUCCEEDED",
+            "PLUGIN_TASK_FAILED",
+            "PLUGIN_TASK_PAUSED"
     );
 
     private final JdbcTemplate jdbc;

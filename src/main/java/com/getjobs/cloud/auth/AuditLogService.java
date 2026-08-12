@@ -62,7 +62,7 @@ public class AuditLogService {
         );
     }
 
-    static String summarizeUserAgent(String userAgent) {
+    public static String summarizeUserAgent(String userAgent) {
         if (userAgent == null || userAgent.isBlank()) {
             return "unknown";
         }

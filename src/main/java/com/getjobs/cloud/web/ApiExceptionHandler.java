@@ -87,6 +87,9 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception exception) {
+        // Only the stable exception type plus the MDC request id are logged:
+        // database or driver messages may carry bound values, token hashes or
+        // user input and must never reach logs.
         log.error("Cloud API 未处理异常，类型={}", exception.getClass().getSimpleName());
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ApiResponse.failure(new ApiError(
                 "INTERNAL_ERROR", "服务暂时无法处理请求", List.of(), false

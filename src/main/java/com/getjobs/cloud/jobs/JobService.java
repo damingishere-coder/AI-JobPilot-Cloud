@@ -1,5 +1,7 @@
 package com.getjobs.cloud.jobs;
 
+import com.getjobs.cloud.delivery.DeliveryModels;
+import com.getjobs.cloud.delivery.DeliveryService;
 import com.getjobs.cloud.match.MatchModels;
 import com.getjobs.cloud.match.MatchRepository;
 import com.getjobs.cloud.match.MatchRepository.MatchRecord;
@@ -38,17 +40,20 @@ public class JobService {
 
     private final JobRepository jobs;
     private final MatchRepository matches;
+    private final DeliveryService delivery;
     private final TenantContextExecutor tenants;
     private final TransactionTemplate transactions;
 
     public JobService(
             JobRepository jobs,
             MatchRepository matches,
+            DeliveryService delivery,
             TenantContextExecutor tenants,
             PlatformTransactionManager transactionManager
     ) {
         this.jobs = jobs;
         this.matches = matches;
+        this.delivery = delivery;
         this.tenants = tenants;
         this.transactions = new TransactionTemplate(transactionManager);
     }
@@ -116,12 +121,14 @@ public class JobService {
                             r.completedAt()
                     ));
                 }
+                // Populate the active/latest delivery task per job
+                Map<UUID, DeliveryModels.TaskStatusRef> tasksByJob = delivery.taskStatusByJob(userId, jobIds);
                 rawJobs = rawJobs.stream()
                         .map(job -> new JobModels.JobSummary(
                                 job.id(), job.platform(), job.title(), job.companyName(),
                                 job.salary(), job.location(), job.status(),
                                 byJobId.get(job.id()),
-                                null, // deliveryTaskStatus — not yet implemented
+                                tasksByJob.get(job.id()),
                                 job.lastSeenAt()
                         ))
                         .toList();
@@ -165,7 +172,7 @@ public class JobService {
                     detail.description(), detail.jobUrl(), detail.companyInfo(),
                     detail.skills(), detail.welfare(), detail.status(),
                     detail.capturedAt(), detail.lastSeenAt(),
-                    matchView, null // deliveryTask — not yet implemented
+                    matchView, delivery.taskDetailByJob(userId, jobId)
             );
         });
     }

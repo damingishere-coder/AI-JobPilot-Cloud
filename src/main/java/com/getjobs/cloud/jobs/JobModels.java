@@ -1,5 +1,6 @@
 package com.getjobs.cloud.jobs;
 
+import com.getjobs.cloud.delivery.DeliveryModels;
 import com.getjobs.cloud.match.MatchModels;
 
 import java.math.BigDecimal;
@@ -24,7 +25,7 @@ public final class JobModels {
             String location,
             String status,
             MatchModels.MatchSummary latestMatchSummary,
-            MatchModels.DeliveryTaskStatus deliveryTaskStatus,
+            DeliveryModels.TaskStatusRef deliveryTaskStatus,
             Instant lastSeenAt
     ) {
     }
@@ -48,7 +49,7 @@ public final class JobModels {
             Instant capturedAt,
             Instant lastSeenAt,
             MatchModels.MatchView latestMatch,
-            MatchModels.DeliveryTaskPlaceholder deliveryTask
+            DeliveryModels.TaskDetailRef deliveryTask
     ) {
     }
 

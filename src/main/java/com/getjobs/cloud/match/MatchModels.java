@@ -77,24 +77,6 @@ public final class MatchModels {
     ) {
     }
 
-    // === Delivery placeholder types (delivery task not yet implemented) ===
-
-    public enum DeliveryTaskStatus {
-        NOT_QUEUED, PENDING, IN_PROGRESS, COMPLETED, FAILED
-    }
-
-    /**
-     * Placeholder record for future delivery task information.
-     * All fields nullable until delivery tasks are implemented.
-     */
-    public record DeliveryTaskPlaceholder(
-            UUID taskId,
-            DeliveryTaskStatus status,
-            Instant createdAt,
-            Instant completedAt
-    ) {
-    }
-
     // Internal record used during match processing
     record MatchContext(
             UUID matchId,

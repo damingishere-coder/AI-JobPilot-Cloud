@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,7 +52,7 @@ class PostgresFlywayIntegrationTest {
     void migratesEmptyPostgresBaselineWithoutLegacyTables() throws Exception {
         Flyway flyway = configuredFlyway();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
 
@@ -59,7 +60,7 @@ class PostgresFlywayIntegrationTest {
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema='app' " +
                             "AND table_name NOT IN ('flyway_schema_history')"
-            ))).isEqualTo(8);
+            ))).isEqualTo(12);
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM pg_extension WHERE extname IN ('citext', 'pgcrypto')"
             ))).isEqualTo(2);
@@ -911,5 +912,1077 @@ class PostgresFlywayIntegrationTest {
             assertThat(rs.next()).isTrue();
             return rs.getInt(1);
         }
+    }
+
+    // ---- Round 6: delivery tasks, plugin devices/tokens and plugin execution ----
+
+    @Test
+    @Order(10)
+    void roundSixTablesEnforceRlsCheckConstraintsAndAppendOnlyEvents() throws Exception {
+        configuredFlyway().migrate();
+        UUID userA = UUID.randomUUID();
+        UUID userB = UUID.randomUUID();
+        UUID deviceA = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + userA + "', 'r6-a@example.com', '$argon2id$test'), " +
+                    "('" + userB + "', 'r6-b@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES (
+                        '%s', '%s', '我的 Edge', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb
+                    )
+                    """.formatted(deviceA, userA));
+            // CHECK: capabilities outside the allowlist are rejected
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.plugin_devices(id, user_id, device_name, installation_id_hash, " +
+                            "extension_version, capabilities) VALUES ('" + UUID.randomUUID() + "', '" + userB +
+                            "', 'Bad', repeat('b', 64), '1.0.0', '[\"LINKEDIN\"]'::jsonb)"
+            )).isInstanceOf(SQLException.class);
+            // CHECK: unknown task status is rejected
+            assertThatThrownBy(() -> stmt.execute(
+                    "UPDATE app.plugin_devices SET status='SUSPENDED' WHERE id='" + deviceA + "'"
+            )).isInstanceOf(SQLException.class);
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD)) {
+            // RLS: user B cannot see user A's device, and without a tenant context nothing is visible
+            app.setAutoCommit(false);
+            try (var stmt = app.createStatement()) {
+                stmt.execute("SELECT set_config('app.current_user_id', '" + userB + "', true)");
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.plugin_devices WHERE id='" + deviceA + "'"
+                ))).isZero();
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.delivery_tasks"
+                ))).isZero();
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.delivery_task_events"
+                ))).isZero();
+            }
+            app.rollback();
+
+            // Events are append-only: UPDATE/DELETE are rejected even in the right tenant
+            UUID taskId = UUID.randomUUID();
+            try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+                stmt.execute("""
+                        INSERT INTO app.job_posts(
+                            id, user_id, platform, fingerprint, title, company_name, job_url,
+                            source_captured_at, last_seen_at
+                        ) VALUES (
+                            '%s', '%s', 'BOSS', repeat('c', 64), 'Java工程师', '示例公司',
+                            'https://www.zhipin.com/job_detail/test.html', now(), now()
+                        )
+                        """.formatted(UUID.randomUUID(), userA));
+                stmt.execute("""
+                        INSERT INTO app.delivery_tasks(
+                            id, user_id, job_post_id, status, idempotency_key_hash, idempotency_payload_hash
+                        ) SELECT '%s', '%s', id, 'PENDING_CONFIRMATION', repeat('d', 64), repeat('e', 64)
+                        FROM app.job_posts WHERE user_id='%s' LIMIT 1
+                        """.formatted(taskId, userA, userA));
+            }
+            app.setAutoCommit(false);
+            try (var stmt = app.createStatement()) {
+                stmt.execute("SELECT set_config('app.current_user_id', '" + userA + "', true)");
+                stmt.execute("""
+                        INSERT INTO app.delivery_task_events(
+                            user_id, delivery_task_id, event_type, actor_type, event_key
+                        ) VALUES ('%s', '%s', 'CREATED', 'SYSTEM', 'test:created')
+                        """.formatted(userA, taskId));
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.delivery_task_events WHERE event_key='test:created'"
+                ))).isEqualTo(1);
+            }
+            app.rollback();
+
+            // UPDATE/DELETE are rejected even under the right tenant; each failing
+            // statement needs its own transaction because PostgreSQL aborts it.
+            app.setAutoCommit(false);
+            try (var stmt = app.createStatement()) {
+                stmt.execute("SELECT set_config('app.current_user_id', '" + userA + "', true)");
+                assertThatThrownBy(() -> stmt.execute(
+                        "UPDATE app.delivery_task_events SET event_type='SKIPPED' WHERE event_key='test:created'"
+                )).isInstanceOf(SQLException.class);
+            }
+            app.rollback();
+            app.setAutoCommit(false);
+            try (var stmt = app.createStatement()) {
+                stmt.execute("SELECT set_config('app.current_user_id', '" + userA + "', true)");
+                assertThatThrownBy(() -> stmt.execute(
+                        "DELETE FROM app.delivery_task_events WHERE event_key='test:created'"
+                )).isInstanceOf(SQLException.class);
+            }
+            app.rollback();
+        }
+    }
+
+    @Test
+    @Order(11)
+    void matchApplyAutoCreatesDeliveryTaskOnlyForBossAndZhilian() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID resumeId = UUID.randomUUID();
+        UUID preferenceId = UUID.randomUUID();
+        UUID bossJob = UUID.randomUUID();
+        UUID zhilianJob = UUID.randomUUID();
+        UUID liepinJob = UUID.randomUUID();
+        UUID bossMatch = UUID.randomUUID();
+        UUID zhilianMatch = UUID.randomUUID();
+        UUID liepinMatch = UUID.randomUUID();
+        UUID reviewMatch = UUID.randomUUID();
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-apply@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.resumes(
+                        id, user_id, original_filename, storage_key, content_type, file_size,
+                        sha256, upload_idempotency_key_hash, encryption_key_id, is_current, parse_status
+                    ) VALUES (
+                        '%s', '%s', 'resume.txt', 'objects/test', 'text/plain', 2,
+                        repeat('a', 64), repeat('b', 64), 'v1', true, 'PARSED'
+                    )
+                    """.formatted(resumeId, user));
+            stmt.execute("""
+                    INSERT INTO app.job_preferences(id, user_id, version, target_titles)
+                    VALUES ('%s', '%s', 1, '["Java工程师"]'::jsonb)
+                    """.formatted(preferenceId, user));
+            for (Object[] job : new Object[][]{
+                    {bossJob, "BOSS", "https://www.zhipin.com/job_detail/boss.html"},
+                    {zhilianJob, "ZHILIAN", "https://sou.zhaopin.com/jobs/jobdetail/test"},
+                    {liepinJob, "LIEPIN", "https://www.liepin.com/job/test"}}) {
+                stmt.execute("""
+                        INSERT INTO app.job_posts(
+                            id, user_id, platform, fingerprint, title, company_name, job_url,
+                            source_captured_at, last_seen_at
+                        ) VALUES (
+                            '%s', '%s', '%s', repeat('c', 64), 'Java工程师', '示例公司', '%s', now(), now()
+                        )
+                        """.formatted(job[0], user, job[1], job[2]));
+            }
+            stmt.execute("""
+                    INSERT INTO app.job_matches(
+                        id, user_id, job_post_id, resume_id, preference_id, status,
+                        input_fingerprint, greeting
+                    ) VALUES
+                    ('%s', '%s', '%s', '%s', '%s', 'PROCESSING', repeat('d', 64), '您好，我对贵司岗位很感兴趣'),
+                    ('%s', '%s', '%s', '%s', '%s', 'PROCESSING', repeat('e', 64), NULL),
+                    ('%s', '%s', '%s', '%s', '%s', 'PROCESSING', repeat('f', 64), 'Liepin 不需要招呼语'),
+                    ('%s', '%s', '%s', '%s', '%s', 'PROCESSING', repeat('a1', 32), '仅评审')
+                    """.formatted(bossMatch, user, bossJob, resumeId, preferenceId,
+                            zhilianMatch, user, zhilianJob, resumeId, preferenceId,
+                            liepinMatch, user, liepinJob, resumeId, preferenceId,
+                            reviewMatch, user, bossJob, resumeId, preferenceId));
+        }
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("UPDATE app.job_matches SET status='SUCCEEDED', decision='APPLY', completed_at=now() " +
+                    "WHERE id IN ('" + bossMatch + "', '" + zhilianMatch + "', '" + liepinMatch + "')");
+            stmt.execute("UPDATE app.job_matches SET status='SUCCEEDED', decision='REVIEW', completed_at=now() " +
+                    "WHERE id='" + reviewMatch + "'");
+
+            // BOSS task copies the match greeting; ZHILIAN keeps null; LIEPIN creates nothing
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_match_id='" + bossMatch + "'"
+            ))).isEqualTo(1);
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT greeting FROM app.delivery_tasks WHERE job_match_id='" + bossMatch + "'"
+            ))).isEqualTo("您好，我对贵司岗位很感兴趣");
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_match_id='" + zhilianMatch + "'"
+            ))).isEqualTo(1);
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT greeting FROM app.delivery_tasks WHERE job_match_id='" + zhilianMatch + "'"
+            ))).isNull();
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_match_id='" + liepinMatch + "'"
+            ))).isZero();
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_match_id='" + reviewMatch + "'"
+            ))).isZero();
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.delivery_tasks WHERE job_match_id='" + bossMatch + "'"
+            ))).isEqualTo("PENDING_CONFIRMATION");
+            // A CREATED event is written next to each auto-created task
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_task_events e JOIN app.delivery_tasks t " +
+                            "ON t.id=e.delivery_task_id WHERE t.job_match_id='" + bossMatch + "' " +
+                            "AND e.event_type='CREATED'"
+            ))).isEqualTo(1);
+
+            // Re-updating the same SUCCEEDED+APPLY match never duplicates the task
+            stmt.execute("UPDATE app.job_matches SET summary='再次更新' WHERE id='" + bossMatch + "'");
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_match_id='" + bossMatch + "'"
+            ))).isEqualTo(1);
+
+            // A second APPLY match for the same BOSS job conflicts with the active-task index
+            UUID secondMatch = UUID.randomUUID();
+            stmt.execute("""
+                    INSERT INTO app.job_matches(
+                        id, user_id, job_post_id, resume_id, preference_id, status,
+                        input_fingerprint, greeting
+                    ) VALUES ('%s', '%s', '%s', '%s', '%s', 'PROCESSING', repeat('b1', 32), '第二轮')
+                    """.formatted(secondMatch, user, bossJob, resumeId, preferenceId));
+            stmt.execute("UPDATE app.job_matches SET status='SUCCEEDED', decision='APPLY', completed_at=now() " +
+                    "WHERE id='" + secondMatch + "'");
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE job_post_id='" + bossJob + "'"
+            ))).isEqualTo(1);
+        }
+    }
+
+    @Test
+    @Order(12)
+    void pluginBindRotatesTokensEnforcesDeviceCapAndAuthenticatesHashes() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-bind@example.com', '$argon2id$test')");
+            stmt.execute("INSERT INTO app.user_profiles(user_id, display_name) VALUES " +
+                    "('" + user + "', '绑定测试')");
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD);
+             var stmt = app.createStatement()) {
+            stmt.execute("SELECT set_config('app.current_user_id', '" + user + "', false)");
+            String installationHash = repeat("a", 64);
+            String tokenHash1 = repeat("b", 64);
+            var bind = stmt.executeQuery(
+                    "SELECT * FROM app.bind_plugin_device('" + user + "', '" + installationHash + "', " +
+                            "'我的 Chrome', 'Chrome', '120', '1.2.0', '[\"BOSS\"]'::jsonb, " +
+                            "'ajp_plg_11111111', '" + tokenHash1 + "', " +
+                            "'[\"device:read\",\"tasks:read\",\"tasks:write\"]'::jsonb, now() + interval '90 days', 10)");
+            assertThat(bind.next()).isTrue();
+            assertThat(bind.getString("outcome")).isEqualTo("OK");
+            UUID deviceId = bind.getObject("bound_device_id", UUID.class);
+            assertThat(bind.getBoolean("device_reused")).isFalse();
+            bind.close();
+
+            // Re-binding the same installation reuses the device and rotates the old token
+            String tokenHash2 = repeat("c", 64);
+            var rebind = stmt.executeQuery(
+                    "SELECT * FROM app.bind_plugin_device('" + user + "', '" + installationHash + "', " +
+                            "'我的 Chrome 2', 'Chrome', '121', '1.3.0', '[\"BOSS\",\"ZHILIAN\"]'::jsonb, " +
+                            "'ajp_plg_22222222', '" + tokenHash2 + "', " +
+                            "'[\"device:read\",\"tasks:read\"]'::jsonb, now() + interval '90 days', 10)");
+            assertThat(rebind.next()).isTrue();
+            assertThat(rebind.getObject("bound_device_id", UUID.class)).isEqualTo(deviceId);
+            assertThat(rebind.getBoolean("device_reused")).isTrue();
+            rebind.close();
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.plugin_tokens WHERE token_hash='" + tokenHash1 + "'"
+            ))).isEqualTo("REVOKED");
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.plugin_devices WHERE user_id='" + user + "' AND status='ACTIVE'"
+            ))).isEqualTo(1);
+
+            // Device cap: only one more new installation fits under max=2
+            stmt.execute("SELECT * FROM app.bind_plugin_device('" + user + "', '" + repeat("d", 64) + "', " +
+                    "'第二台', 'Edge', '121', '1.3.0', '[\"BOSS\"]'::jsonb, 'ajp_plg_33333333', '" + repeat("e", 64) + "', " +
+                    "'[\"device:read\"]'::jsonb, now() + interval '90 days', 2)");
+            var limited = stmt.executeQuery(
+                    "SELECT outcome FROM app.bind_plugin_device('" + user + "', '" + repeat("f", 64) + "', " +
+                            "'第三台', 'Edge', '121', '1.3.0', '[\"BOSS\"]'::jsonb, 'ajp_plg_44444444', '" + repeat("a1", 32) + "', " +
+                            "'[\"device:read\"]'::jsonb, now() + interval '90 days', 2)");
+            assertThat(limited.next()).isTrue();
+            assertThat(limited.getString(1)).isEqualTo("DEVICE_LIMIT_EXCEEDED");
+            limited.close();
+
+            // Token authentication returns the minimal trusted fields and never a hash column
+            var authed = stmt.executeQuery(
+                    "SELECT * FROM app.authenticate_plugin_token('ajp_plg_22222222', '" + tokenHash2 + "')");
+            assertThat(authed.next()).isTrue();
+            assertThat(authed.getObject("device_id", UUID.class)).isEqualTo(deviceId);
+            assertThat(authed.getString("token_status")).isEqualTo("ACTIVE");
+            assertThat(authed.getString("user_status")).isEqualTo("ACTIVE");
+            assertThat(authed.getString("user_display_name")).isEqualTo("绑定测试");
+            assertThat(authed.getString("device_status")).isEqualTo("ACTIVE");
+            var authColumns = authed.getMetaData();
+            for (int i = 1; i <= authColumns.getColumnCount(); i++) {
+                assertThat(authColumns.getColumnName(i).toLowerCase()).doesNotContain("hash");
+            }
+            authed.close();
+
+            // Unknown token yields an empty set
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.authenticate_plugin_token('ajp_plg_zzzzzzzz', '" + repeat("a2", 32) + "')"
+            ))).isZero();
+
+            // Same prefix with a different hash must not authenticate either
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.authenticate_plugin_token('ajp_plg_22222222', '" + repeat("e", 64) + "')"
+            ))).isZero();
+
+            // Revocation kills tokens and flips the device
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT app.revoke_plugin_device('" + user + "', '" + deviceId + "', '用户主动撤销')"
+            ))).isEqualTo("t");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.plugin_tokens WHERE token_hash='" + tokenHash2 + "'"
+            ))).isEqualTo("REVOKED");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.plugin_devices WHERE id='" + deviceId + "'"
+            ))).isEqualTo("REVOKED");
+
+            // Expired tokens are lazily marked and reported as EXPIRED
+            String expiredHash = repeat("a3", 32);
+            stmt.execute("INSERT INTO app.plugin_tokens(user_id, plugin_device_id, token_prefix, token_hash, " +
+                    "scopes, status, expires_at, created_at) VALUES ('" + user + "', '" + deviceId + "', " +
+                    "'ajp_plg_expired', '" + expiredHash + "', '[\"device:read\"]'::jsonb, 'ACTIVE', " +
+                    "now() - interval '1 hour', now() - interval '2 hours')");
+            var expired = stmt.executeQuery(
+                    "SELECT * FROM app.authenticate_plugin_token('ajp_plg_expired', '" + expiredHash + "')");
+            assertThat(expired.next()).isTrue();
+            assertThat(expired.getString("token_status")).isEqualTo("EXPIRED");
+            expired.close();
+        }
+    }
+
+    @Test
+    @Order(13)
+    void pluginTaskStartIsAtomicAndEnforcesVersionDeviceAndAttemptLimits() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID job = UUID.randomUUID();
+        UUID deviceA = UUID.randomUUID();
+        UUID deviceB = UUID.randomUUID();
+        UUID task = UUID.randomUUID();
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-start@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', repeat('c', 64), 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(job, user));
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES
+                    ('%s', '%s', '设备A', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb),
+                    ('%s', '%s', '设备B', repeat('b', 64), '1.0.0', '["BOSS"]'::jsonb)
+                    """.formatted(deviceA, user, deviceB, user));
+            stmt.execute("""
+                    INSERT INTO app.delivery_tasks(
+                        id, user_id, job_post_id, assigned_device_id, status,
+                        idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by
+                    ) VALUES (
+                        '%s', '%s', '%s', '%s', 'CONFIRMED',
+                        repeat('d', 64), repeat('e', 64), now(), '%s'
+                    )
+                    """.formatted(task, user, job, deviceA, user));
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD);
+             var stmt = app.createStatement()) {
+            String keyA = repeat("a1", 32);
+            String keyB = repeat("b1", 32);
+            // Wrong version is rejected before any state change
+            assertThat(startOutcome(stmt, user, deviceA, task, 99, "exec-00000001", keyA, "hash-1"))
+                    .isEqualTo("VERSION_CONFLICT");
+            // A different device cannot claim a task assigned to device A
+            assertThat(startOutcome(stmt, user, deviceB, task, 1, "exec-00000001", keyA, "hash-1"))
+                    .isEqualTo("TASK_ALREADY_CLAIMED");
+            // Correct device + version claims the task atomically
+            var started = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + deviceA + "', '" + task + "', " +
+                            "1, 'exec-00000001', '" + keyA + "', 'hash-1', 300, 3)");
+            assertThat(started.next()).isTrue();
+            assertThat(started.getString("outcome")).isEqualTo("OK");
+            assertThat(started.getString("task_status")).isEqualTo("EXECUTING");
+            assertThat(started.getObject("new_lease_id", UUID.class)).isNotNull();
+            assertThat(started.getInt("attempt_number")).isEqualTo(1);
+            assertThat(started.getInt("new_version")).isEqualTo(2);
+            assertThat(started.getString("job_platform")).isEqualTo("BOSS");
+            started.close();
+
+            // Replaying the same start returns the live lease even with the old version
+            var replay = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + deviceA + "', '" + task + "', " +
+                            "1, 'exec-00000001', '" + keyA + "', 'hash-1', 300, 3)");
+            assertThat(replay.next()).isTrue();
+            assertThat(replay.getString("outcome")).isEqualTo("REPLAY");
+            assertThat(replay.getObject("new_lease_id", UUID.class)).isNotNull();
+            replay.close();
+
+            // Same execution with a different payload conflicts instead of replaying
+            var conflicting = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_start('" + user + "', '" + deviceA + "', '" + task + "', " +
+                            "1, 'exec-00000001', '" + keyA + "', 'hash-different', 300, 3)");
+            assertThat(conflicting.next()).isTrue();
+            assertThat(conflicting.getString(1)).isEqualTo("IDEMPOTENCY_CONFLICT");
+            conflicting.close();
+
+            // Another device cannot steal the executing task
+            assertThat(startOutcome(stmt, user, deviceB, task, 2, "exec-00000002", keyB, "hash-2"))
+                    .isEqualTo("TASK_ALREADY_CLAIMED");
+        }
+    }
+
+    @Test
+    @Order(14)
+    void pluginSuccessFailPauseAndLeaseRecoveryEnforceTerminalStates() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID device = UUID.randomUUID();
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-flow@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES ('%s', '%s', '设备', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb)
+                    """.formatted(device, user));
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD);
+             var stmt = app.createStatement()) {
+            stmt.execute("SELECT set_config('app.current_user_id', '" + user + "', false)");
+            UUID successTask = seedConfirmedTask(ownerConnection(), user, device);
+            UUID failTask = seedConfirmedTask(ownerConnection(), user, device);
+            UUID expiredTask = seedConfirmedTask(ownerConnection(), user, device);
+            String keySuccess = repeat("c1", 32);
+            String keyFail = repeat("d1", 32);
+            String keyPause = repeat("e1", 32);
+
+            var successStart = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "1, 'exec-success-1', '" + repeat("a9", 32) + "', 'h', 300, 3)");
+            assertThat(successStart.next()).isTrue();
+            UUID successLease = successStart.getObject("new_lease_id", UUID.class);
+            successStart.close();
+
+            // Wrong lease is rejected
+            var wrongLease = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_success('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "'" + UUID.randomUUID() + "', 'exec-success-1', 2, now(), 'DELIVERED', " +
+                            "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + keySuccess + "', 'p-ok')");
+            assertThat(wrongLease.next()).isTrue();
+            assertThat(wrongLease.getString(1)).isEqualTo("LEASE_INVALID");
+            wrongLease.close();
+
+            // Correct lease succeeds; SUCCEEDED is terminal and replay-safe
+            var success = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_success('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "'" + successLease + "', 'exec-success-1', 2, now(), 'DELIVERED', " +
+                            "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + keySuccess + "', 'p-ok')");
+            assertThat(success.next()).isTrue();
+            assertThat(success.getString("outcome")).isEqualTo("OK");
+            assertThat(success.getInt("new_version")).isEqualTo(3);
+            success.close();
+            var successReplay = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_success('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "'" + successLease + "', 'exec-success-1', 2, now(), 'DELIVERED', " +
+                            "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + keySuccess + "', 'p-ok')");
+            assertThat(successReplay.next()).isTrue();
+            assertThat(successReplay.getString(1)).isEqualTo("REPLAY");
+            successReplay.close();
+            // Same execution with a different payload conflicts instead of replaying
+            var successConflict = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_success('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "'" + successLease + "', 'exec-success-1', 2, now(), 'ALREADY_DELIVERED', " +
+                            "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + keySuccess + "', 'p-other')");
+            assertThat(successConflict.next()).isTrue();
+            assertThat(successConflict.getString(1)).isEqualTo("IDEMPOTENCY_CONFLICT");
+            successConflict.close();
+            var failAfterSuccess = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_fail('" + user + "', '" + device + "', '" + successTask + "', " +
+                            "'" + successLease + "', 'exec-success-1', 3, now(), 'NETWORK_ERROR', '重试', true, " +
+                            "'" + repeat("f1", 32) + "', 'p-fail')");
+            assertThat(failAfterSuccess.next()).isTrue();
+            assertThat(failAfterSuccess.getString(1)).isEqualTo("INVALID_STATE");
+            failAfterSuccess.close();
+            // Exactly one SUCCEEDED event was written across the replay
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_task_events WHERE delivery_task_id='" + successTask + "' " +
+                            "AND event_type='SUCCEEDED'"
+            ))).isEqualTo(1);
+
+            // Fail flow: EXECUTING -> FAILED with retryability, then replay-safe
+            var failStart = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + failTask + "', " +
+                            "1, 'exec-fail-1', '" + repeat("b9", 32) + "', 'h', 300, 3)");
+            assertThat(failStart.next()).isTrue();
+            UUID failLease = failStart.getObject("new_lease_id", UUID.class);
+            failStart.close();
+            var failed = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_fail('" + user + "', '" + device + "', '" + failTask + "', " +
+                            "'" + failLease + "', 'exec-fail-1', 2, now(), 'BUTTON_NOT_FOUND', '按钮不存在', true, " +
+                            "'" + keyFail + "', 'p-fail')");
+            assertThat(failed.next()).isTrue();
+            assertThat(failed.getString("outcome")).isEqualTo("OK");
+            assertThat(failed.getInt("attempt_number")).isEqualTo(1);
+            failed.close();
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.delivery_tasks WHERE id='" + failTask + "'"
+            ))).isEqualTo("FAILED");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT last_error_code FROM app.delivery_tasks WHERE id='" + failTask + "'"
+            ))).isEqualTo("BUTTON_NOT_FOUND");
+
+            // Pause flow: EXECUTING -> PAUSED, lease released
+            UUID pauseTask = seedConfirmedTask(ownerConnection(), user, device);
+            var pauseStart = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + pauseTask + "', " +
+                            "1, 'exec-pause-1', '" + repeat("c9", 32) + "', 'h', 300, 3)");
+            assertThat(pauseStart.next()).isTrue();
+            UUID pauseLease = pauseStart.getObject("new_lease_id", UUID.class);
+            pauseStart.close();
+            var paused = stmt.executeQuery(
+                    "SELECT outcome FROM app.plugin_task_pause('" + user + "', '" + device + "', '" + pauseTask + "', " +
+                            "'" + pauseLease + "', 'exec-pause-1', 2, 'CAPTCHA_REQUIRED', '需要人工验证', " +
+                            "'" + keyPause + "', 'p-pause')");
+            assertThat(paused.next()).isTrue();
+            assertThat(paused.getString(1)).isEqualTo("OK");
+            paused.close();
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.delivery_tasks WHERE id='" + pauseTask + "'"
+            ))).isEqualTo("PAUSED");
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE id='" + pauseTask + "' AND lease_id IS NULL"
+            ))).isEqualTo(1);
+            assertThat(startOutcome(stmt, user, device, pauseTask, 3, "exec-pause-2", repeat("a2", 32), "h"))
+                    .isEqualTo("INVALID_STATE");
+
+            // Lease expiry: under the attempt cap returns to CONFIRMED
+            var expiredStart = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + expiredTask + "', " +
+                            "1, 'exec-expired-1', '" + repeat("a3", 32) + "', 'h', 300, 3)");
+            assertThat(expiredStart.next()).isTrue();
+            expiredStart.close();
+            try (Connection owner = ownerConnection(); var stmt2 = owner.createStatement()) {
+                stmt2.execute("UPDATE app.delivery_tasks SET lease_expires_at = now() - interval '1 second' " +
+                        "WHERE id='" + expiredTask + "'");
+            }
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.recover_expired_delivery_leases(3)"
+            ))).isEqualTo(1);
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.delivery_tasks WHERE id='" + expiredTask + "'"
+            ))).isEqualTo("CONFIRMED");
+            // Recovery releases the assigned device so any capable device can claim it.
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE id='" + expiredTask
+                            + "' AND assigned_device_id IS NULL"
+            ))).isEqualTo(1);
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT event_type FROM app.delivery_task_events WHERE delivery_task_id='" + expiredTask + "' " +
+                            "ORDER BY id DESC LIMIT 1"
+            ))).isEqualTo("LEASE_EXPIRED");
+
+            // Lease expiry at the attempt cap transitions to FAILED
+            UUID exhaustedTask = seedConfirmedTask(ownerConnection(), user, device);
+            try (Connection owner = ownerConnection(); var stmt2 = owner.createStatement()) {
+                stmt2.execute("UPDATE app.delivery_tasks SET attempt_count=2 WHERE id='" + exhaustedTask + "'");
+            }
+            var exhaustedStart = stmt.executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + exhaustedTask + "', " +
+                            "1, 'exec-exhausted-1', '" + repeat("a4", 32) + "', 'h', 300, 3)");
+            assertThat(exhaustedStart.next()).isTrue();
+            assertThat(exhaustedStart.getString("outcome")).isEqualTo("OK");
+            exhaustedStart.close();
+            try (Connection owner = ownerConnection(); var stmt2 = owner.createStatement()) {
+                stmt2.execute("UPDATE app.delivery_tasks SET lease_expires_at = now() - interval '1 second' " +
+                        "WHERE id='" + exhaustedTask + "'");
+            }
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.recover_expired_delivery_leases(3)"
+            ))).isEqualTo(1);
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT status FROM app.delivery_tasks WHERE id='" + exhaustedTask + "'"
+            ))).isEqualTo("FAILED");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT last_error_code FROM app.delivery_tasks WHERE id='" + exhaustedTask + "'"
+            ))).isEqualTo("MAX_ATTEMPTS_EXCEEDED");
+            // The exhausted FAILED task also releases the assigned device.
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.delivery_tasks WHERE id='" + exhaustedTask
+                            + "' AND assigned_device_id IS NULL"
+            ))).isEqualTo(1);
+        }
+    }
+
+    @Test
+    @Order(15)
+    void deliveryTaskStatusConstraintsAndActiveJobUniquenessHold() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID job = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-constraints@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', repeat('c', 64), 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(job, user));
+            // One active task per user + job: a second CONFIRMED row violates the partial index
+            stmt.execute("""
+                    INSERT INTO app.delivery_tasks(
+                        id, user_id, job_post_id, status, idempotency_key_hash, idempotency_payload_hash,
+                        confirmed_at, confirmed_by
+                    ) VALUES ('%s', '%s', '%s', 'CONFIRMED', repeat('d', 64), repeat('e', 64), now(), '%s')
+                    """.formatted(UUID.randomUUID(), user, job, user));
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, " +
+                            "idempotency_key_hash, idempotency_payload_hash) VALUES ('" + UUID.randomUUID() +
+                            "', '" + user + "', '" + job + "', 'PENDING_CONFIRMATION', " +
+                            "repeat('f', 64), repeat('a1', 32))"
+            )).isInstanceOf(SQLException.class);
+            // Greeting length is bounded in code points
+            assertThatThrownBy(() -> stmt.execute(
+                    "UPDATE app.delivery_tasks SET greeting=repeat('好', 61) WHERE user_id='" + user + "'"
+            )).isInstanceOf(SQLException.class);
+            // State/lease consistency CHECK: CONFIRMED cannot hold a lease
+            assertThatThrownBy(() -> stmt.execute(
+                    "UPDATE app.delivery_tasks SET lease_id='" + UUID.randomUUID() + "' WHERE user_id='" + user + "'"
+            )).isInstanceOf(SQLException.class);
+            // A second job isolates the following CHECK probes from the active-task index
+            UUID checkJob = UUID.randomUUID();
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', repeat('a5', 32), '约束测试', '示例公司',
+                        'https://www.zhipin.com/job_detail/check.html', now(), now()
+                    )
+                    """.formatted(checkJob, user));
+            // Status/confirmation consistency: LEASED without confirmation is rejected
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, " +
+                            "idempotency_key_hash, idempotency_payload_hash) VALUES ('" + UUID.randomUUID() +
+                            "', '" + user + "', '" + checkJob + "', 'LEASED', " +
+                            "repeat('a1', 32), repeat('a2', 32))"
+            )).isInstanceOf(SQLException.class);
+            // Execution consistency: EXECUTING requires execution id and an assigned device
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, " +
+                            "idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by, " +
+                            "lease_id, leased_at, lease_expires_at) VALUES ('" + UUID.randomUUID() +
+                            "', '" + user + "', '" + checkJob + "', 'EXECUTING', " +
+                            "repeat('b1', 32), repeat('b2', 32), now(), '" + user + "', " +
+                            "'" + UUID.randomUUID() + "', now(), now() + interval '5 minutes')"
+            )).isInstanceOf(SQLException.class);
+            // Terminal consistency: SUCCEEDED requires a finished timestamp
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, " +
+                            "idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by) " +
+                            "VALUES ('" + UUID.randomUUID() + "', '" + user + "', '" + checkJob + "', 'SUCCEEDED', " +
+                            "repeat('c1', 32), repeat('c2', 32), now(), '" + user + "')"
+            )).isInstanceOf(SQLException.class);
+        }
+    }
+
+    private static String startOutcome(
+            java.sql.Statement stmt, UUID user, UUID device, UUID task,
+            int version, String executionId, String keyHash, String payloadHash
+    ) throws SQLException {
+        var result = stmt.executeQuery(
+                "SELECT outcome FROM app.plugin_task_start('" + user + "', '" + device + "', '" + task + "', " +
+                        version + ", '" + executionId + "', '" + keyHash + "', '" + payloadHash + "', 300, 3)");
+        try (result) {
+            assertThat(result.next()).isTrue();
+            return result.getString(1);
+        }
+    }
+
+    private static Connection appConnection() throws SQLException {
+        return DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD);
+    }
+
+    @Test
+    @Order(16)
+    void concurrentFinishSerializesOnTheTaskRowAndTerminalStateWins() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID device = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-race1@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES ('%s', '%s', '设备', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb)
+                    """.formatted(device, user));
+        }
+        UUID task = seedConfirmedTask(ownerConnection(), user, device);
+
+        try (Connection a = appConnection(); Connection b = appConnection()) {
+            a.setAutoCommit(false);
+            b.setAutoCommit(false);
+            var started = a.createStatement().executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + device + "', '" + task + "', " +
+                            "1, 'exec-race-1', '" + repeat("a9", 32) + "', 'p-start', 300, 3)");
+            assertThat(started.next()).isTrue();
+            UUID lease = started.getObject("new_lease_id", UUID.class);
+            started.close();
+            a.commit();
+
+            // A commits a success first; the racing fail blocks on the row lock.
+            a.setAutoCommit(false);
+            var success = a.createStatement().executeQuery(
+                    "SELECT outcome FROM app.plugin_task_success('" + user + "', '" + device + "', '" + task + "', " +
+                            "'" + lease + "', 'exec-race-1', 2, now(), 'DELIVERED', " +
+                            "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + repeat("a1", 32) + "', 'p-succ')");
+            assertThat(success.next()).isTrue();
+            assertThat(success.getString(1)).isEqualTo("OK");
+            success.close();
+
+            var pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<String> failOutcome = pool.submit(() -> {
+                    try (var stmt = b.createStatement()) {
+                        var rs = stmt.executeQuery(
+                                "SELECT outcome FROM app.plugin_task_fail('" + user + "', '" + device + "', '" + task + "', " +
+                                        "'" + lease + "', 'exec-race-1', 3, now(), 'NETWORK_ERROR', '竞态失败', true, " +
+                                        "'" + repeat("b1", 32) + "', 'p-fail')");
+                        rs.next();
+                        String outcome = rs.getString(1);
+                        rs.close();
+                        return outcome;
+                    }
+                });
+                Thread.sleep(500);
+                assertThat(failOutcome.isDone()).isFalse();
+                a.commit();
+                assertThat(failOutcome.get(10, TimeUnit.SECONDS)).isEqualTo("INVALID_STATE");
+                b.rollback();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+                assertThat(singleString(stmt.executeQuery(
+                        "SELECT status FROM app.delivery_tasks WHERE id='" + task + "'"
+                ))).isEqualTo("SUCCEEDED");
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.delivery_task_events WHERE delivery_task_id='" + task + "' " +
+                                "AND event_type IN ('FAILED','PAUSED')"
+                ))).isZero();
+            }
+        }
+    }
+
+    @Test
+    @Order(17)
+    void concurrentStartBetweenTwoDevicesHasASingleWinnerThatBindsTheDevice() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID deviceA = UUID.randomUUID();
+        UUID deviceB = UUID.randomUUID();
+        UUID job = UUID.randomUUID();
+        UUID task = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-race2@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', repeat('c', 64), 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(job, user));
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES
+                    ('%s', '%s', '设备A', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb),
+                    ('%s', '%s', '设备B', repeat('b', 64), '1.0.0', '["BOSS"]'::jsonb)
+                    """.formatted(deviceA, user, deviceB, user));
+            // Unassigned CONFIRMED task: the first device to start wins.
+            stmt.execute("""
+                    INSERT INTO app.delivery_tasks(
+                        id, user_id, job_post_id, status,
+                        idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by
+                    ) VALUES (
+                        '%s', '%s', '%s', 'CONFIRMED',
+                        repeat('d', 64), repeat('e', 64), now(), '%s'
+                    )
+                    """.formatted(task, user, job, user));
+        }
+
+        try (Connection a = appConnection(); Connection b = appConnection()) {
+            a.setAutoCommit(false);
+            b.setAutoCommit(false);
+            var winner = a.createStatement().executeQuery(
+                    "SELECT * FROM app.plugin_task_start('" + user + "', '" + deviceA + "', '" + task + "', " +
+                            "1, 'exec-win-a', '" + repeat("a1", 32) + "', 'p-a', 300, 3)");
+            assertThat(winner.next()).isTrue();
+            assertThat(winner.getString("outcome")).isEqualTo("OK");
+            UUID leaseA = winner.getObject("new_lease_id", UUID.class);
+            winner.close();
+
+            var pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<String> loser = pool.submit(() -> {
+                    try (var stmt = b.createStatement()) {
+                        var rs = stmt.executeQuery(
+                                "SELECT outcome FROM app.plugin_task_start('" + user + "', '" + deviceB + "', '" + task + "', " +
+                                        "1, 'exec-lose-b', '" + repeat("b1", 32) + "', 'p-b', 300, 3)");
+                        rs.next();
+                        String outcome = rs.getString(1);
+                        rs.close();
+                        return outcome;
+                    }
+                });
+                Thread.sleep(500);
+                assertThat(loser.isDone()).isFalse();
+                a.commit();
+                String loserOutcome = loser.get(10, TimeUnit.SECONDS);
+                assertThat(loserOutcome).isIn("VERSION_CONFLICT", "TASK_ALREADY_CLAIMED");
+                b.rollback();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            // The winner bound the device; the loser cannot report back even with
+            // the winner's lease and execution id at the current version.
+            try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+                assertThat(singleString(stmt.executeQuery(
+                        "SELECT assigned_device_id::text FROM app.delivery_tasks WHERE id='" + task + "'"
+                ))).isEqualTo(deviceA.toString());
+            }
+            try (var stmt = b.createStatement()) {
+                var rejected = stmt.executeQuery(
+                        "SELECT outcome FROM app.plugin_task_success('" + user + "', '" + deviceB + "', '" + task + "', " +
+                                "'" + leaseA + "', 'exec-win-a', 2, now(), 'DELIVERED', " +
+                                "'{\"pageState\":\"SUCCESS_NOTICE\"}'::jsonb, '" + repeat("c1", 32) + "', 'p-c')");
+                assertThat(rejected.next()).isTrue();
+                assertThat(rejected.getString(1)).isEqualTo("LEASE_INVALID");
+                rejected.close();
+            }
+        }
+    }
+
+    @Test
+    @Order(18)
+    void concurrentBindsSerializeOnTheUserRowAndHonorTheDeviceCap() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-cap@example.com', '$argon2id$test')");
+        }
+
+        try (Connection a = appConnection(); Connection b = appConnection()) {
+            a.setAutoCommit(false);
+            b.setAutoCommit(false);
+            var first = a.createStatement().executeQuery(
+                    "SELECT outcome FROM app.bind_plugin_device('" + user + "', '" + repeat("a1", 32) + "', " +
+                            "'第一台', 'Chrome', '120', '1.0.0', '[\"BOSS\"]'::jsonb, 'ajp_plg_11111111', '" + repeat("a2", 32) + "', " +
+                            "'[\"device:read\"]'::jsonb, now() + interval '90 days', 1)");
+            assertThat(first.next()).isTrue();
+            assertThat(first.getString(1)).isEqualTo("OK");
+            first.close();
+
+            var pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<String> second = pool.submit(() -> {
+                    try (var stmt = b.createStatement()) {
+                        var rs = stmt.executeQuery(
+                                "SELECT outcome FROM app.bind_plugin_device('" + user + "', '" + repeat("b1", 32) + "', " +
+                                        "'第二台', 'Edge', '121', '1.1.0', '[\"BOSS\"]'::jsonb, 'ajp_plg_22222222', '" + repeat("b2", 32) + "', " +
+                                        "'[\"device:read\"]'::jsonb, now() + interval '90 days', 1)");
+                        rs.next();
+                        String outcome = rs.getString(1);
+                        rs.close();
+                        return outcome;
+                    }
+                });
+                Thread.sleep(500);
+                assertThat(second.isDone()).isFalse();
+                a.commit();
+                assertThat(second.get(10, TimeUnit.SECONDS)).isEqualTo("DEVICE_LIMIT_EXCEEDED");
+                b.rollback();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+                assertThat(singleLong(stmt.executeQuery(
+                        "SELECT count(*) FROM app.plugin_devices WHERE user_id='" + user + "' AND status='ACTIVE'"
+                ))).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    @Order(19)
+    void disabledAccountCannotBindNewDevicesOrTokens() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash, status) VALUES " +
+                    "('" + user + "', 'r6-disabled@example.com', '$argon2id$test', 'DISABLED')");
+        }
+
+        try (Connection app = appConnection(); var stmt = app.createStatement()) {
+            var bind = stmt.executeQuery(
+                    "SELECT * FROM app.bind_plugin_device('" + user + "', '" + repeat("a1", 32) + "', " +
+                            "'禁用设备', 'Chrome', '120', '1.0.0', '[\"BOSS\"]'::jsonb, 'ajp_plg_11111111', '" + repeat("a2", 32) + "', " +
+                            "'[\"device:read\"]'::jsonb, now() + interval '90 days', 10)");
+            assertThat(bind.next()).isTrue();
+            assertThat(bind.getString("outcome")).isEqualTo("ACCOUNT_DISABLED");
+            assertThat(bind.getObject("bound_device_id", UUID.class)).isNull();
+            bind.close();
+        }
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.plugin_devices WHERE user_id='" + user + "'"
+            ))).isZero();
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.plugin_tokens WHERE user_id='" + user + "'"
+            ))).isZero();
+        }
+    }
+
+    @Test
+    @Order(20)
+    void deliveryTaskStateChecksRejectForgedInconsistentFields() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID device = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + user + "', 'r6-forged@example.com', '$argon2id$test')");
+            stmt.execute("""
+                    INSERT INTO app.plugin_devices(
+                        id, user_id, device_name, installation_id_hash, extension_version, capabilities
+                    ) VALUES ('%s', '%s', '设备', repeat('a', 64), '1.0.0', '["BOSS"]'::jsonb)
+                    """.formatted(device, user));
+        }
+        // Every probe targets its own job so the active-task unique index can
+        // never mask the CHECK constraint under test.
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            // PENDING_CONFIRMATION carrying an assigned device
+            UUID job1 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, assigned_device_id, status, "
+                            + "idempotency_key_hash, idempotency_payload_hash) VALUES ('" + UUID.randomUUID()
+                            + "', '" + user + "', '" + job1 + "', '" + device + "', 'PENDING_CONFIRMATION', "
+                            + "repeat('a1', 32), repeat('a2', 32))"
+            )).isInstanceOf(SQLException.class);
+            // PENDING_CONFIRMATION carrying an execution id
+            UUID job2 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, execution_id, "
+                            + "idempotency_key_hash, idempotency_payload_hash) VALUES ('" + UUID.randomUUID()
+                            + "', '" + user + "', '" + job2 + "', 'PENDING_CONFIRMATION', 'exec-00000001', "
+                            + "repeat('b1', 32), repeat('b2', 32))"
+            )).isInstanceOf(SQLException.class);
+            // CONFIRMED carrying an execution id
+            UUID job3 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, execution_id, "
+                            + "idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by) "
+                            + "VALUES ('" + UUID.randomUUID() + "', '" + user + "', '" + job3 + "', 'CONFIRMED', "
+                            + "'exec-00000001', repeat('c1', 32), repeat('c2', 32), now(), '" + user + "')"
+            )).isInstanceOf(SQLException.class);
+            // LEASED with confirmation and a lease but no assigned device
+            UUID job4 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, "
+                            + "idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by, "
+                            + "lease_id, leased_at, lease_expires_at) VALUES ('" + UUID.randomUUID()
+                            + "', '" + user + "', '" + job4 + "', 'LEASED', repeat('d1', 32), repeat('d2', 32), "
+                            + "now(), '" + user + "', '" + UUID.randomUUID() + "', now(), now() + interval '5 minutes')"
+            )).isInstanceOf(SQLException.class);
+            // SKIPPED carrying stale confirmation fields
+            UUID job5 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, "
+                            + "idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by, finished_at) "
+                            + "VALUES ('" + UUID.randomUUID() + "', '" + user + "', '" + job5 + "', 'SKIPPED', "
+                            + "repeat('e1', 32), repeat('e2', 32), now(), '" + user + "', now())"
+            )).isInstanceOf(SQLException.class);
+            // SKIPPED carrying an assigned device
+            UUID job6 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, assigned_device_id, status, "
+                            + "idempotency_key_hash, idempotency_payload_hash, finished_at) VALUES ('" + UUID.randomUUID()
+                            + "', '" + user + "', '" + job6 + "', '" + device + "', 'SKIPPED', "
+                            + "repeat('f1', 32), repeat('f2', 32), now())"
+            )).isInstanceOf(SQLException.class);
+            // CANCELLED carrying an execution id
+            UUID job7 = seedJobRow(owner, user);
+            assertThatThrownBy(() -> stmt.execute(
+                    "INSERT INTO app.delivery_tasks(id, user_id, job_post_id, status, execution_id, "
+                            + "idempotency_key_hash, idempotency_payload_hash, finished_at) VALUES ('" + UUID.randomUUID()
+                            + "', '" + user + "', '" + job7 + "', 'CANCELLED', 'exec-00000001', "
+                            + "repeat('a3', 32), repeat('a4', 32), now())"
+            )).isInstanceOf(SQLException.class);
+        }
+    }
+
+    /** Seeds a fresh BOSS job row (no matches) for CHECK-constraint probes. */
+    private static UUID seedJobRow(Connection owner, UUID user) throws SQLException {
+        UUID job = UUID.randomUUID();
+        try (var stmt = owner.createStatement()) {
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', '%s', 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(job, user,
+                    repeat(UUID.randomUUID().toString().replace("-", "").substring(0, 32), 2).substring(0, 64)));
+        }
+        return job;
+    }
+
+    /** Seeds a fresh BOSS job plus a CONFIRMED task assigned to the device. */
+    private static UUID seedConfirmedTask(
+            Connection owner, UUID user, UUID device
+    ) throws SQLException {
+        UUID job = UUID.randomUUID();
+        UUID task = UUID.randomUUID();
+        try (var stmt = owner.createStatement()) {
+            stmt.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', '%s', 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(job, user,
+                    repeat(UUID.randomUUID().toString().replace("-", "").substring(0, 32), 2).substring(0, 64)));
+            stmt.execute("""
+                    INSERT INTO app.delivery_tasks(
+                        id, user_id, job_post_id, assigned_device_id, status,
+                        idempotency_key_hash, idempotency_payload_hash, confirmed_at, confirmed_by
+                    ) VALUES (
+                        '%s', '%s', '%s', '%s', 'CONFIRMED',
+                        '%s', '%s', now(), '%s'
+                    )
+                    """.formatted(task, user, job, device,
+                    repeat(UUID.randomUUID().toString().replace("-", "").substring(0, 32), 2).substring(0, 64),
+                    repeat(UUID.randomUUID().toString().replace("-", "").substring(0, 32), 2).substring(0, 64),
+                    user));
+        }
+        return task;
+    }
+
+    private static String repeat(String value, int count) {
+        return value.repeat(count);
     }
 }
