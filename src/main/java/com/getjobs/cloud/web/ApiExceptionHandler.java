@@ -9,6 +9,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -60,6 +64,24 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleMalformedJson() {
         return ResponseEntity.badRequest().body(ApiResponse.failure(new ApiError(
                 "MALFORMED_JSON", "请求参数格式不正确", List.of(), false
+        )));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge() {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(ApiResponse.failure(new ApiError(
+                "PAYLOAD_TOO_LARGE", "简历文件不能超过 10 MiB", List.of(), false
+        )));
+    }
+
+    @ExceptionHandler({
+            MissingRequestHeaderException.class,
+            MissingServletRequestPartException.class,
+            MethodArgumentTypeMismatchException.class
+    })
+    public ResponseEntity<ApiResponse<Void>> handleMissingOrInvalidRequestValue(Exception exception) {
+        return ResponseEntity.badRequest().body(ApiResponse.failure(new ApiError(
+                "VALIDATION_ERROR", "请求参数不正确", List.of(), false
         )));
     }
 

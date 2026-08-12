@@ -1,6 +1,6 @@
 # Cloud Docker 一键启动指南
 
-本指南对应第 3 轮 Cloud 用户系统。启动后只有 Nginx 绑定宿主机端口，默认入口为：
+本指南对应第 4 轮 Cloud 简历、偏好和岗位池底座。启动后只有 Nginx 绑定宿主机端口，默认入口为：
 
 ```text
 http://localhost:8080
@@ -33,9 +33,9 @@ chmod +x start_docker.sh
 
 启动脚本会自动：
 
-1. 在被 Git 忽略的 `.secrets/` 中生成 PostgreSQL 迁移角色、应用角色、Redis 密码和认证 HMAC Pepper；
+1. 在被 Git 忽略的 `.secrets/` 中生成 PostgreSQL 迁移角色、应用角色、Redis 密码、认证 HMAC Pepper 和简历数据加密 Key；
 2. 校验 Compose 配置并构建镜像；
-3. 等待 PostgreSQL、Redis 和一次性 Flyway 迁移完成；
+3. 等待 PostgreSQL、Redis、ClamAV 和一次性 Flyway 迁移完成；
 4. 启动 API、AI Worker、Web 和 Nginx，并等待全部健康；
 5. 验证 `http://localhost:8080/api/health` 返回 `UP`。
 
@@ -49,11 +49,14 @@ chmod +x start_docker.sh
 | `web` | 非 root 静态 Web 服务 | 无 |
 | `api` | 隔离的 Cloud API 进程 | 无 |
 | `ai-worker` | AI Worker 进程骨架；本轮不消费真实消息 | 无 |
+| `clamav` | 简历恶意文件扫描；病毒库保存在独立数据卷 | 无 |
 | `migrate` | 一次性 Flyway PostgreSQL 迁移 | 无 |
 | `postgres` | PostgreSQL 16，业务事实源 | 无 |
 | `redis` | Redis 7 + AOF，保存 Web Session、认证限流计数及后续队列基础设施 | 无 |
 
-Redis 不是唯一业务事实源。用户账号和审计记录保存于 PostgreSQL；Redis Session 丢失会要求用户重新登录，但不会丢失账号数据。本轮仍不实现插件绑定码或 AI 队列消费。
+Redis 不是唯一业务事实源。用户账号、简历元数据、求职目标、岗位和审计记录保存于 PostgreSQL；Redis Session 丢失会要求用户重新登录，但不会丢失账号数据。本轮仍不实现插件绑定码、真实岗位采集或 AI 匹配队列。
+
+简历原文件位于 `private-storage` 私有卷并使用 AES-256-GCM 加密，提取文本也以密文保存在 PostgreSQL。`.secrets/data_encryption_key` 丢失后无法恢复既有简历，因此备份私有文件卷和数据库时必须同时安全备份该 Key，且绝不能提交到 Git。
 
 ## 登录与 Session
 
@@ -76,7 +79,7 @@ curl -i http://localhost:8080/api/health
 ```
 
 - `/livez`：只判断 API 进程是否存活，不依赖 PostgreSQL、Redis 或文件存储。
-- `/readyz`：检查 PostgreSQL、Redis 和当前私有文件存储；任一依赖故障时返回 HTTP 503。
+- `/readyz`：API 检查 PostgreSQL、Redis、当前私有文件存储和 ClamAV；任一依赖故障时返回 HTTP 503。
 - `/api/health`：兼容别名，与 `/readyz` 含义相同。
 - `/actuator/prometheus`：仅容器内部网络可访问，Nginx 明确拒绝外部访问。
 
@@ -87,7 +90,7 @@ curl -i http://localhost:8080/api/health
 ```bash
 docker compose ps
 docker compose logs -f
-docker compose logs -f api ai-worker
+docker compose logs -f api ai-worker clamav
 docker compose restart api ai-worker
 docker compose down
 ```
@@ -133,11 +136,13 @@ macOS / Linux：
 
 ```bash
 docker compose ps -a
-docker compose logs migrate postgres redis api ai-worker web nginx
+docker compose logs migrate postgres redis clamav api ai-worker web nginx
 ```
 
 - `migrate` 以退出码 `0` 结束是正常现象；非零表示数据库迁移失败。
+- ClamAV 首次下载病毒库和加载 `clamd` 可能需要数分钟；此时 API 会等待其健康，不会绕过扫描接受简历。
 - `api` 或 `ai-worker` 不就绪时，优先检查 PostgreSQL、Redis 和私有存储权限。
+- 简历上传返回 `DEPENDENCY_UNAVAILABLE` 时检查 `docker compose logs clamav`；安全扫描不可用时 API 会拒绝上传。
 - 登录页反复返回登录状态时，检查 Redis 是否健康、浏览器是否收到 `AJP_SESSION`，以及本机 HTTP 是否误设了 `AUTH_COOKIE_SECURE=true`。
 - 返回 `CSRF_INVALID` 时刷新页面后重试；前端只会对安全过滤器明确拒绝的请求自动刷新 CSRF Token 并重试一次。
 - 返回 `ACCOUNT_LOCKED` 时等待响应中的 `Retry-After`；连续失败锁定会从 15、30、60 分钟递增，最长 24 小时。

@@ -16,7 +16,7 @@ fi
 
 mkdir -p "$SECRET_DIR"
 chmod 700 "$SECRET_DIR"
-for name in db_owner_password db_app_password redis_password auth_hash_pepper; do
+for name in db_owner_password db_app_password redis_password auth_hash_pepper data_encryption_key; do
   path="$SECRET_DIR/$name"
   if [[ ! -s "$path" ]]; then
     umask 077

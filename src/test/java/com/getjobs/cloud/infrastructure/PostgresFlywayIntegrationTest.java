@@ -51,7 +51,7 @@ class PostgresFlywayIntegrationTest {
     void migratesEmptyPostgresBaselineWithoutLegacyTables() throws Exception {
         Flyway flyway = configuredFlyway();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
 
@@ -59,7 +59,7 @@ class PostgresFlywayIntegrationTest {
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema='app' " +
                             "AND table_name NOT IN ('flyway_schema_history')"
-            ))).isEqualTo(3);
+            ))).isEqualTo(6);
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM pg_extension WHERE extname IN ('citext', 'pgcrypto')"
             ))).isEqualTo(2);
@@ -176,6 +176,80 @@ class PostgresFlywayIntegrationTest {
                         "SELECT count(*) FROM app.user_profiles"
                 ))).isZero();
                 reused.rollback();
+            }
+        }
+    }
+
+    @Test
+    @Order(5)
+    void roundFourTablesEnforceRlsAndWorkerClaimsOnlyThroughNarrowFunction() throws Exception {
+        configuredFlyway().migrate();
+        UUID userA = UUID.randomUUID();
+        UUID userB = UUID.randomUUID();
+        UUID resumeId = UUID.randomUUID();
+        UUID preferenceId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        try (Connection owner = ownerConnection(); var statement = owner.createStatement()) {
+            statement.execute("INSERT INTO app.users(id, email, password_hash) VALUES " +
+                    "('" + userA + "', 'round4-a@example.com', '$argon2id$test'), " +
+                    "('" + userB + "', 'round4-b@example.com', '$argon2id$test')");
+            statement.execute("""
+                    INSERT INTO app.resumes(
+                        id, user_id, original_filename, storage_key, content_type, file_size,
+                        sha256, upload_idempotency_key_hash, encryption_key_id, is_current
+                    ) VALUES (
+                        '%s', '%s', 'resume.txt', 'objects/test', 'text/plain', 2,
+                        repeat('a', 64), repeat('b', 64), 'v1', true
+                    )
+                    """.formatted(resumeId, userA));
+            statement.execute("""
+                    INSERT INTO app.job_preferences(id, user_id, version, target_titles)
+                    VALUES ('%s', '%s', 1, '["Java工程师"]'::jsonb)
+                    """.formatted(preferenceId, userA));
+            statement.execute("""
+                    INSERT INTO app.job_posts(
+                        id, user_id, platform, fingerprint, title, company_name, job_url,
+                        source_captured_at, last_seen_at
+                    ) VALUES (
+                        '%s', '%s', 'BOSS', repeat('c', 64), 'Java工程师', '示例公司',
+                        'https://www.zhipin.com/job_detail/test.html', now(), now()
+                    )
+                    """.formatted(jobId, userA));
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD)) {
+            app.setAutoCommit(false);
+            try (var statement = app.createStatement()) {
+                statement.execute("SELECT set_config('app.current_user_id', '" + userA + "', true)");
+                assertThat(singleLong(statement.executeQuery("SELECT count(*) FROM app.resumes"))).isEqualTo(1);
+                assertThat(singleLong(statement.executeQuery("SELECT count(*) FROM app.job_preferences"))).isEqualTo(1);
+                assertThat(singleLong(statement.executeQuery("SELECT count(*) FROM app.job_posts"))).isEqualTo(1);
+                assertThat(statement.executeUpdate(
+                        "UPDATE app.job_posts SET title='越权修改' WHERE user_id='" + userB + "' AND id='" + jobId + "'"
+                )).isZero();
+            }
+            app.rollback();
+
+            app.setAutoCommit(false);
+            try (var statement = app.createStatement()) {
+                statement.execute("SELECT set_config('app.current_user_id', '" + userB + "', true)");
+                assertThat(singleLong(statement.executeQuery(
+                        "SELECT count(*) FROM app.resumes WHERE id='" + resumeId + "'"
+                ))).isZero();
+                assertThat(singleLong(statement.executeQuery(
+                        "SELECT count(*) FROM app.job_preferences WHERE id='" + preferenceId + "'"
+                ))).isZero();
+                assertThat(singleLong(statement.executeQuery(
+                        "SELECT count(*) FROM app.job_posts WHERE id='" + jobId + "'"
+                ))).isZero();
+            }
+            app.rollback();
+
+            try (var statement = app.createStatement()) {
+                assertThat(singleString(statement.executeQuery(
+                        "SELECT owner_user_id::text FROM app.claim_resume_parse_job(300)"
+                ))).isEqualTo(userA.toString());
+                assertThat(singleLong(statement.executeQuery("SELECT count(*) FROM app.resumes"))).isZero();
             }
         }
     }

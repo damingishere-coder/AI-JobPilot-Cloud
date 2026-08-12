@@ -53,6 +53,7 @@ dependencies {
     implementation("io.github.cdimascio:dotenv-java:2.2.0")
     implementation("jakarta.annotation:jakarta.annotation-api:2.1.1")
     implementation("org.apache.pdfbox:pdfbox:3.0.3")
+    implementation("org.apache.poi:poi-ooxml:5.4.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     developmentOnly("org.springframework.boot:spring-boot-devtools:3.5.7")
 

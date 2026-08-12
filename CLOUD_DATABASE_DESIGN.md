@@ -111,12 +111,18 @@ erDiagram
 | `sha256` | `char(64)` | 是 | 文件完整性和用户内去重 |
 | `parse_status` | `varchar(24)` | 是 | `UPLOADED`、`PARSING`、`PARSED`、`FAILED` |
 | `parse_message` | `varchar(500)` | 否 | 面向用户的脱敏失败信息 |
-| `extracted_text_encrypted` | `text` | 否 | 加密后的解析文本，或改存私有对象 |
+| `extracted_text_ciphertext` | `bytea` | 否 | AES-256-GCM 加密后的解析文本 |
+| `extracted_text_nonce` | `bytea` | 否 | 每次加密随机生成的 12 字节 Nonce |
+| `encryption_key_id` | `varchar(64)` | 是 | 标识解密所需 Key，不保存 Key 本身 |
 | `text_version` | `integer` | 是 | 默认 `1`，便于重新解析 |
 | `is_current` | `boolean` | 是 | 默认 `false`，每用户仅一份未删除当前简历 |
+| `version` | `integer` | 是 | 乐观锁版本 |
+| `parse_attempts` / `purge_attempts` | `integer` | 是 | Worker 有界重试计数 |
+| `parse_lease_*` / `purge_lease_*` | 多种 | 否 | Worker 短租约，避免重复解析或清理 |
 | `created_at` | `timestamptz` | 是 | 创建时间 |
 | `updated_at` | `timestamptz` | 是 | 更新时间 |
 | `deleted_at` | `timestamptz` | 否 | 删除申请时间，配合物理清理任务 |
+| `purged_at` | `timestamptz` | 否 | 私有对象已物理删除时间 |
 
 索引建议：`UNIQUE (id, user_id)`；`INDEX (user_id, created_at DESC)`；部分唯一索引 `UNIQUE (user_id) WHERE is_current AND deleted_at IS NULL`；用户内去重可建 `INDEX (user_id, sha256)`。
 

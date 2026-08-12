@@ -12,9 +12,19 @@ spring:
   jackson:
     deserialization:
       fail-on-unknown-properties: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
 
 app:
   role: api
+  clamav:
+    enabled: ${CLAMAV_ENABLED:true}
+    host: ${CLAMAV_HOST:127.0.0.1}
+    port: ${CLAMAV_PORT:3310}
+    connect-timeout: ${CLAMAV_CONNECT_TIMEOUT:3s}
+    read-timeout: ${CLAMAV_READ_TIMEOUT:30s}
   auth:
     hash-pepper: ${auth_hash_pepper:${AUTH_HASH_PEPPER:}}
     terms-version: ${AUTH_TERMS_VERSION:2026-08-draft}
@@ -32,5 +42,13 @@ app:
     csrf-ip-limit: 30
     csrf-ip-window: 1m
 server:
+  max-http-request-header-size: 32KB
   forward-headers-strategy: framework
   port: ${SERVER_PORT:8888}
+
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState,db,redis,storage,clamAv

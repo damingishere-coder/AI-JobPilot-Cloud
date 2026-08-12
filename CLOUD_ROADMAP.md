@@ -162,6 +162,8 @@ Auth/User Controller 与 Service、Spring Security、Redis Session/Rate Limit、
 
 ## 阶段 4：简历和求职目标
 
+> 实施状态：第 4 轮已完成。已交付 PDF/DOCX/TXT 上传、ClamAV 安检、AES-256-GCM 加密、异步文本提取、删除清理、版本化求职目标、审计和 RLS 隔离。
+
 ### 目标
 
 让用户安全维护一份当前简历和版本化求职目标，作为 AI 匹配的可信输入。
@@ -194,6 +196,8 @@ Resume/Preference API、文件存储和解析 Worker、PostgreSQL、Web 表单�
 - 不支持无限文件格式和超大视频/图片简历。
 
 ## 阶段 5：岗位池和 AI 匹配
+
+> 提前完成的底座：第 4 轮已建立 `job_posts`、用户内去重索引、RLS、只读列表/详情 API 和 Web 页面。岗位写入、真实插件采集、`job_matches`、AI 队列和计量仍属于本阶段及阶段 7。
 
 ### 目标
 

@@ -159,6 +159,7 @@ jobs:
           printf 'ci-app-password' > .secrets/db_app_password
           printf 'ci-redis-password' > .secrets/redis_password
           printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
+          openssl rand -hex 32 > .secrets/data_encryption_key
           docker compose config --quiet
 
       - name: Verify required Dockerfile stages
@@ -212,6 +213,7 @@ jobs:
           printf 'ci-app-password' > .secrets/db_app_password
           printf 'ci-redis-password' > .secrets/redis_password
           printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
+          openssl rand -hex 32 > .secrets/data_encryption_key
 
       - name: Build and start Cloud stack
         run: docker compose up -d --build --wait --wait-timeout 600
