@@ -349,6 +349,140 @@ class AuthSystemIntegrationTest {
                 .doesNotContain(json(created).at("/data/csrfToken").asText());
     }
 
+    @Test
+    void preferencesAndJobPoolValidateVersionsFiltersAndTenantOwnership() throws Exception {
+        BrowserSession browser = new BrowserSession();
+        HttpResponse<String> registration = browser.post(
+                "/api/auth/register",
+                """
+                {"email":"round4-api@example.com","password":"StrongPassword!2026","acceptTerms":true}
+                """,
+                browser.csrf()
+        );
+        assertThat(registration.statusCode()).isEqualTo(201);
+        String csrf = json(registration).at("/data/csrfToken").asText();
+        UUID userA = UUID.fromString(json(registration).at("/data/user/id").asText());
+        UUID userB = UUID.randomUUID();
+
+        HttpResponse<String> emptyPreference = browser.get("/api/preferences");
+        assertThat(emptyPreference.statusCode()).isEqualTo(200);
+        assertThat(json(emptyPreference).get("data").isNull()).isTrue();
+
+        HttpResponse<String> preference = browser.put(
+                "/api/preferences",
+                """
+                {
+                  "version": null,
+                  "targetTitles": [" Java 开发 ", "java 开发", "后端开发"],
+                  "cities": ["上海"],
+                  "salaryMinK": 20,
+                  "salaryMaxK": 35,
+                  "experienceLevels": [],
+                  "degreeLevels": [],
+                  "industries": [],
+                  "companyScales": [],
+                  "preferredCompanies": [],
+                  "excludedCompanies": [],
+                  "excludedKeywords": [],
+                  "extraFilters": {}
+                }
+                """,
+                csrf
+        );
+        assertThat(preference.statusCode()).as(preference.body()).isEqualTo(200);
+        assertThat(json(preference).at("/data/version").asInt()).isEqualTo(1);
+        assertThat(json(preference).at("/data/targetTitles").size()).isEqualTo(2);
+
+        HttpResponse<String> invalidSalary = browser.put(
+                "/api/preferences",
+                """
+                {
+                  "version": 1,
+                  "targetTitles": ["Java 开发"],
+                  "cities": [],
+                  "salaryMinK": 40,
+                  "salaryMaxK": 20,
+                  "experienceLevels": [],
+                  "degreeLevels": [],
+                  "industries": [],
+                  "companyScales": [],
+                  "preferredCompanies": [],
+                  "excludedCompanies": [],
+                  "excludedKeywords": [],
+                  "extraFilters": {}
+                }
+                """,
+                csrf
+        );
+        assertThat(invalidSalary.statusCode()).isEqualTo(400);
+        assertThat(json(invalidSalary).at("/error/code").asText()).isEqualTo("VALIDATION_ERROR");
+
+        HttpResponse<String> staleVersion = browser.put(
+                "/api/preferences",
+                preferenceRequest(null),
+                csrf
+        );
+        assertThat(staleVersion.statusCode()).isEqualTo(409);
+        assertThat(json(staleVersion).at("/error/code").asText()).isEqualTo("RESOURCE_VERSION_CONFLICT");
+
+        UUID jobA = UUID.randomUUID();
+        UUID jobB = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO app.users(id, email, password_hash) VALUES (?, 'round4-other@example.com', '$argon2id$test')",
+                userB
+        );
+        jdbc.update(
+                """
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('a', 64), 'Java 后端工程师', 'A 公司',
+                          'https://www.zhipin.com/job_detail/a.html', now(), now())
+                """,
+                jobA, userA
+        );
+        jdbc.update(
+                """
+                INSERT INTO app.job_posts(
+                    id, user_id, platform, fingerprint, title, company_name, job_url,
+                    source_captured_at, last_seen_at
+                ) VALUES (?, ?, 'BOSS', repeat('b', 64), '不可见岗位', 'B 公司',
+                          'https://www.zhipin.com/job_detail/b.html', now(), now())
+                """,
+                jobB, userB
+        );
+
+        HttpResponse<String> jobs = browser.get("/api/jobs?keyword=Java&sort=title,asc");
+        assertThat(jobs.statusCode()).as(jobs.body()).isEqualTo(200);
+        assertThat(json(jobs).at("/data/total").asLong()).isEqualTo(1);
+        assertThat(json(jobs).at("/data/items/0/id").asText()).isEqualTo(jobA.toString());
+        assertThat(browser.get("/api/jobs/" + jobB).statusCode()).isEqualTo(404);
+
+        HttpResponse<String> unsafeSort = browser.get("/api/jobs?sort=title;drop%20table%20app.users,asc");
+        assertThat(unsafeSort.statusCode()).isEqualTo(400);
+        assertThat(json(unsafeSort).at("/error/code").asText()).isEqualTo("VALIDATION_ERROR");
+    }
+
+    private String preferenceRequest(Integer version) {
+        return """
+                {
+                  "version": %s,
+                  "targetTitles": ["Java 开发"],
+                  "cities": [],
+                  "salaryMinK": 20,
+                  "salaryMaxK": 35,
+                  "experienceLevels": [],
+                  "degreeLevels": [],
+                  "industries": [],
+                  "companyScales": [],
+                  "preferredCompanies": [],
+                  "excludedCompanies": [],
+                  "excludedKeywords": [],
+                  "extraFilters": {}
+                }
+                """.formatted(version == null ? "null" : version);
+    }
+
     private JsonNode json(HttpResponse<String> response) throws Exception {
         return objectMapper.readTree(response.body());
     }
@@ -380,9 +514,17 @@ class AuthSystemIntegrationTest {
         }
 
         HttpResponse<String> post(String path, String body, String csrfToken) throws Exception {
+            return sendWithBody("POST", path, body, csrfToken);
+        }
+
+        HttpResponse<String> put(String path, String body, String csrfToken) throws Exception {
+            return sendWithBody("PUT", path, body, csrfToken);
+        }
+
+        private HttpResponse<String> sendWithBody(String method, String path, String body, String csrfToken) throws Exception {
             HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body));
+                    .method(method, HttpRequest.BodyPublishers.ofString(body));
             if (csrfToken != null) {
                 builder.header("X-CSRF-TOKEN", csrfToken);
             }
