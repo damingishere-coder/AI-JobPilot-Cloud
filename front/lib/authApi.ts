@@ -38,7 +38,8 @@ export async function cloudApiRequest<T>(
   csrfToken?: string,
 ): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body !== undefined && !headers.has("Content-Type")) {
+  const formDataBody = typeof FormData !== "undefined" && init.body instanceof FormData
+  if (init.body !== undefined && !formDataBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json")
   }
   if (csrfToken) {
@@ -54,7 +55,7 @@ export async function cloudApiRequest<T>(
       cache: "no-store",
     })
   } catch {
-    throw new AuthApiError(0, "NETWORK_ERROR", "无法连接认证服务，请确认 Cloud 服务已经启动", [], true)
+    throw new AuthApiError(0, "NETWORK_ERROR", "无法连接 Cloud 服务，请确认服务已经启动", [], true)
   }
 
   const raw = await response.text()
@@ -77,10 +78,10 @@ export async function cloudApiRequest<T>(
       error?.retryable ?? response.status >= 500,
     )
   }
-  if (!envelope?.data) {
-    throw new AuthApiError(response.status, "INVALID_RESPONSE", "认证服务返回了无效响应")
+  if (!envelope || !Object.prototype.hasOwnProperty.call(envelope, "data")) {
+    throw new AuthApiError(response.status, "INVALID_RESPONSE", "Cloud 服务返回了无效响应")
   }
-  return envelope.data
+  return envelope.data as T
 }
 
 export function safeNextPath(candidate: string | null | undefined): string {

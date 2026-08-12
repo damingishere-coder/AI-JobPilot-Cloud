@@ -6,18 +6,14 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import type { IconType } from 'react-icons'
 import {
-  BiBarChart,
-  BiBrain,
   BiBriefcase,
   BiChevronDown,
   BiCog,
+  BiFile,
   BiHomeAlt,
   BiLogOut,
   BiMoon,
-  BiSearch,
   BiSun,
-  BiTask,
-  BiUserCircle,
 } from 'react-icons/bi'
 import { motion } from 'framer-motion'
 import { useTheme } from 'next-themes'
@@ -46,33 +42,14 @@ const navGroups: NavGroup[] = [
   },
   {
     title: '求职资料',
-    items: [{ href: '/ai-config', icon: BiBrain, label: 'AI配置', color: 'text-violet-500' }],
-  },
-  {
-    title: '投递平台',
     items: [
-      { href: '/boss', icon: BiBriefcase, label: 'Boss直聘', color: 'text-blue-500' },
-      { href: '/zhilian', icon: BiUserCircle, label: '智联招聘', color: 'text-cyan-500' },
+      { href: '/resume', icon: BiFile, label: '我的简历', color: 'text-violet-500' },
+      { href: '/preferences', icon: BiCog, label: '求职目标', color: 'text-cyan-500' },
     ],
   },
   {
-    title: '投递记录',
-    items: [
-      { href: '/boss/analysis', icon: BiBarChart, label: 'Boss分析', color: 'text-teal-500' },
-      { href: '/zhilian/analysis', icon: BiBarChart, label: '智联分析', color: 'text-sky-500' },
-    ],
-  },
-  {
-    title: '系统设置',
-    items: [{ href: '/env-config', icon: BiCog, label: '环境配置', color: 'text-slate-500' }],
-  },
-  {
-    title: '实验功能',
-    experimental: true,
-    items: [
-      { href: '/liepin', icon: BiSearch, label: '猎聘', color: 'text-orange-400', disabled: true, badge: '实验' },
-      { href: '/51job', icon: BiTask, label: '51job', color: 'text-amber-400', disabled: true, badge: '实验' },
-    ],
+    title: '岗位管理',
+    items: [{ href: '/jobs', icon: BiBriefcase, label: '岗位池', color: 'text-blue-500' }],
   },
 ]
 
