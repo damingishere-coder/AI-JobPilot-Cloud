@@ -243,12 +243,18 @@ jobs:
             "$base_url/api/auth/register")"
           authenticated_csrf="$(jq -r '.data.csrfToken' <<< "$register_response")"
           test "$(jq -r '.success' <<< "$register_response")" = 'true'
-          curl --fail --silent --cookie "$cookie_jar" "$base_url/api/me" | grep -q 'ci\*\*\*@example.invalid'
+          curl --fail --silent --cookie "$cookie_jar" \
+            -H "X-CSRF-TOKEN: $authenticated_csrf" -X POST --data '' "$base_url/api/me" \
+            | grep -q 'ci\*\*\*@example.invalid'
           curl --fail --silent --cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
             -H "X-CSRF-TOKEN: $authenticated_csrf" -X POST "$base_url/api/auth/logout" \
             | grep -q '"loggedOut":true'
+          anonymous_csrf="$(curl --fail --silent \
+            --cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+            "$base_url/api/auth/csrf" | jq -r '.data.csrfToken')"
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --cookie "$cookie_jar" "$base_url/api/me")" = '401'
+            --cookie "$cookie_jar" -H "X-CSRF-TOKEN: $anonymous_csrf" \
+            -X POST --data '' "$base_url/api/me")" = '401'
 
       - name: Print logs on failure
         if: failure()

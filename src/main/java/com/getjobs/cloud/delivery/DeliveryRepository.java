@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -34,11 +36,73 @@ public class DeliveryRepository {
             t.started_at, t.finished_at, t.version, t.created_at, t.updated_at
             """;
 
+    /**
+     * Fixed list/count SQL. Every filter is always present and guarded by a
+     * boolean bind parameter, so a request value can never change the SQL
+     * text; only JDBC bind values vary at runtime. Disabled filters bind
+     * explicit placeholder values because PostgreSQL cannot infer the type of
+     * a NULL bind; the status multi-select always binds a non-empty
+     * collection so an empty selection can never produce an invalid IN ().
+     * The TASK_COUNT_SQL WHERE block must stay identical to the TASK_LIST_SQL
+     * WHERE block.
+     */
+    private static final String TASK_COUNT_SQL = """
+            SELECT count(*) FROM app.delivery_tasks t
+            JOIN app.job_posts jp ON jp.id=t.job_post_id AND jp.user_id=t.user_id
+            WHERE t.user_id=:userId
+              AND (:filterStatuses=false OR t.status IN (:statuses))
+              AND (:filterPlatform=false OR jp.platform=:platform)
+              AND (:filterKeyword=false OR (jp.title ILIKE :keyword OR jp.company_name ILIKE :keyword))
+              AND (:filterCreatedFrom=false OR t.created_at>=:createdFrom)
+              AND (:filterCreatedTo=false OR t.created_at<=:createdTo)
+            """;
+
+    /**
+     * Sorting is resolved through the fixed CASE branches below: exactly one
+     * branch is non-NULL for the bound :sort key, every other branch is NULL
+     * (NULLS LAST), and t.id ASC is the stable tie-breaker.
+     */
+    private static final String TASK_LIST_SQL = """
+            SELECT t.id, t.status, t.greeting, t.version, t.confirmation_version, t.confirmed_at,
+            t.created_at, t.updated_at,
+            jp.id AS job_id, jp.platform, jp.title, jp.company_name, jp.job_url,
+            m.id AS match_id, m.score, m.decision,
+            d.id AS device_id, d.device_name,
+            e.event_type AS last_event_type, e.created_at AS last_event_at,
+            e.id AS last_event_id, e.from_status AS last_from, e.to_status AS last_to,
+            e.actor_type AS last_actor, e.details::text AS last_details
+            FROM app.delivery_tasks t
+            JOIN app.job_posts jp ON jp.id=t.job_post_id AND jp.user_id=t.user_id
+            LEFT JOIN app.job_matches m ON m.id=t.job_match_id AND m.user_id=t.user_id
+            LEFT JOIN app.plugin_devices d ON d.id=t.assigned_device_id AND d.user_id=t.user_id
+            LEFT JOIN LATERAL (
+              SELECT id, event_type, from_status, to_status, actor_type, created_at, details
+              FROM app.delivery_task_events le WHERE le.delivery_task_id=t.id AND le.user_id=t.user_id
+              ORDER BY le.id DESC LIMIT 1) e ON true
+            WHERE t.user_id=:userId
+              AND (:filterStatuses=false OR t.status IN (:statuses))
+              AND (:filterPlatform=false OR jp.platform=:platform)
+              AND (:filterKeyword=false OR (jp.title ILIKE :keyword OR jp.company_name ILIKE :keyword))
+              AND (:filterCreatedFrom=false OR t.created_at>=:createdFrom)
+              AND (:filterCreatedTo=false OR t.created_at<=:createdTo)
+            ORDER BY
+              CASE WHEN :sort='CREATED_ASC' THEN t.created_at END ASC NULLS LAST,
+              CASE WHEN :sort='CREATED_DESC' THEN t.created_at END DESC NULLS LAST,
+              CASE WHEN :sort='UPDATED_ASC' THEN t.updated_at END ASC NULLS LAST,
+              CASE WHEN :sort='UPDATED_DESC' THEN t.updated_at END DESC NULLS LAST,
+              CASE WHEN :sort='CONFIRMED_ASC' THEN t.confirmed_at END ASC NULLS LAST,
+              CASE WHEN :sort='CONFIRMED_DESC' THEN t.confirmed_at END DESC NULLS LAST,
+              t.id ASC
+            LIMIT :limit OFFSET :offset
+            """;
+
     private final JdbcTemplate jdbc;
+    private final NamedParameterJdbcTemplate named;
     private final ObjectMapper objectMapper;
 
     public DeliveryRepository(JdbcTemplate jdbc, ObjectMapper objectMapper) {
         this.jdbc = jdbc;
+        this.named = new NamedParameterJdbcTemplate(jdbc);
         this.objectMapper = objectMapper;
     }
 
@@ -319,46 +383,34 @@ public class DeliveryRepository {
     // ---- Web list / detail ----
 
     public long count(UUID userId, TaskQuery query) {
-        String sql = "SELECT count(*) FROM app.delivery_tasks t "
-                + "JOIN app.job_posts jp ON jp.id=t.job_post_id AND jp.user_id=t.user_id "
-                + query.where();
-        return countQuery(sql, query, userId);
+        Long total = named.queryForObject(TASK_COUNT_SQL, query.parameters(userId), Long.class);
+        return total == null ? 0 : total;
     }
 
     public List<TaskListRow> list(UUID userId, TaskQuery query) {
-        List<Object> parameters = new ArrayList<>();
-        String sql = "SELECT t.id, t.status, t.greeting, t.version, t.confirmation_version, t.confirmed_at, "
-                + "t.created_at, t.updated_at, "
-                + "jp.id AS job_id, jp.platform, jp.title, jp.company_name, jp.job_url, "
-                + "m.id AS match_id, m.score, m.decision, "
-                + "d.id AS device_id, d.device_name, "
-                + "e.event_type AS last_event_type, e.created_at AS last_event_at, "
-                + "e.id AS last_event_id, e.from_status AS last_from, e.to_status AS last_to, "
-                + "e.actor_type AS last_actor, e.details::text AS last_details "
-                + "FROM app.delivery_tasks t "
-                + "JOIN app.job_posts jp ON jp.id=t.job_post_id AND jp.user_id=t.user_id "
-                + "LEFT JOIN app.job_matches m ON m.id=t.job_match_id AND m.user_id=t.user_id "
-                + "LEFT JOIN app.plugin_devices d ON d.id=t.assigned_device_id AND d.user_id=t.user_id "
-                + "LEFT JOIN LATERAL ("
-                + "  SELECT id, event_type, from_status, to_status, actor_type, created_at, details "
-                + "  FROM app.delivery_task_events le WHERE le.delivery_task_id=t.id AND le.user_id=t.user_id "
-                + "  ORDER BY le.id DESC LIMIT 1) e ON true "
-                + query.where()
-                + " ORDER BY " + query.orderBy()
-                + " LIMIT ? OFFSET ?";
-        parameters.add(userId);
-        query.parameters(parameters);
-        parameters.add(query.size());
-        parameters.add((query.page() - 1) * query.size());
-        return jdbc.query(sql, this::mapListRow, parameters.toArray());
+        MapSqlParameterSource parameters = query.parameters(userId)
+                .addValue("limit", query.size())
+                .addValue("offset", (query.page() - 1) * query.size());
+        return named.query(TASK_LIST_SQL, parameters, this::mapListRow);
     }
 
-    private long countQuery(String sql, TaskQuery query, UUID userId) {
-        List<Object> parameters = new ArrayList<>();
-        parameters.add(userId);
-        query.parameters(parameters);
-        Long count = jdbc.queryForObject(sql, Long.class, parameters.toArray());
-        return count == null ? 0 : count;
+    /**
+     * Resolves the finite sort enum to the matching hard-coded CASE branch key
+     * inside the fixed TASK_LIST_SQL. The resolved key only ever travels as a
+     * bind parameter; no client text can reach the SQL string.
+     */
+    private static String sortKey(TaskSort sort) {
+        if (sort == null) {
+            return "CREATED_DESC";
+        }
+        return switch (sort) {
+            case CREATED_ASC -> "CREATED_ASC";
+            case CREATED_DESC -> "CREATED_DESC";
+            case UPDATED_ASC -> "UPDATED_ASC";
+            case UPDATED_DESC -> "UPDATED_DESC";
+            case CONFIRMED_ASC -> "CONFIRMED_ASC";
+            case CONFIRMED_DESC -> "CONFIRMED_DESC";
+        };
     }
 
     // ---- plugin pending list ----
@@ -847,6 +899,17 @@ public class DeliveryRepository {
     ) {
     }
 
+    /**
+     * Finite sort key for the task list. The repository resolves each value to
+     * a hard-coded CASE branch key inside the fixed TASK_LIST_SQL; no
+     * free-form SQL string is ever passed through this type.
+     */
+    public enum TaskSort {
+        CREATED_ASC, CREATED_DESC,
+        UPDATED_ASC, UPDATED_DESC,
+        CONFIRMED_ASC, CONFIRMED_DESC
+    }
+
     /** Validated list filter carried from the service layer. */
     public record TaskQuery(
             int page,
@@ -856,45 +919,33 @@ public class DeliveryRepository {
             String keyword,
             Instant createdFrom,
             Instant createdTo,
-            String orderBy
+            TaskSort sort
     ) {
-        String where() {
-            StringBuilder sql = new StringBuilder("WHERE t.user_id=?");
-            if (!statuses.isEmpty()) {
-                sql.append(" AND t.status IN (")
-                        .append(String.join(",", statuses.stream().map(s -> "?").toList()))
-                        .append(")");
-            }
-            if (platform != null) {
-                sql.append(" AND jp.platform=?");
-            }
-            if (keyword != null) {
-                sql.append(" AND (jp.title ILIKE ? OR jp.company_name ILIKE ?)");
-            }
-            if (createdFrom != null) {
-                sql.append(" AND t.created_at>=?");
-            }
-            if (createdTo != null) {
-                sql.append(" AND t.created_at<=?");
-            }
-            return sql.toString();
-        }
+        /** Placeholder collection bound when no status is selected; the filter is disabled via the boolean flag. */
+        private static final List<String> NO_STATUSES = List.of("__NONE__");
 
-        void parameters(List<Object> parameters) {
-            parameters.addAll(statuses);
-            if (platform != null) {
-                parameters.add(platform);
-            }
-            if (keyword != null) {
-                parameters.add("%" + keyword + "%");
-                parameters.add("%" + keyword + "%");
-            }
-            if (createdFrom != null) {
-                parameters.add(java.sql.Timestamp.from(createdFrom));
-            }
-            if (createdTo != null) {
-                parameters.add(java.sql.Timestamp.from(createdTo));
-            }
+        /**
+         * Binds every filter exactly once as an enable flag plus an explicit
+         * value. Disabled filters carry fixed placeholder values (the status
+         * collection is always non-empty), so PostgreSQL always sees a typed
+         * parameter and an empty selection can never produce an invalid IN ().
+         */
+        MapSqlParameterSource parameters(UUID userId) {
+            MapSqlParameterSource parameters = new MapSqlParameterSource("userId", userId);
+            parameters.addValue("filterStatuses", !statuses.isEmpty());
+            parameters.addValue("statuses", statuses.isEmpty() ? NO_STATUSES : statuses);
+            parameters.addValue("filterPlatform", platform != null);
+            parameters.addValue("platform", platform == null ? "" : platform);
+            parameters.addValue("filterKeyword", keyword != null);
+            parameters.addValue("keyword", keyword == null ? "" : "%" + keyword + "%");
+            parameters.addValue("filterCreatedFrom", createdFrom != null);
+            parameters.addValue("createdFrom", java.sql.Timestamp.from(
+                    createdFrom == null ? Instant.EPOCH : createdFrom));
+            parameters.addValue("filterCreatedTo", createdTo != null);
+            parameters.addValue("createdTo", java.sql.Timestamp.from(
+                    createdTo == null ? Instant.EPOCH : createdTo));
+            parameters.addValue("sort", sortKey(sort));
+            return parameters;
         }
     }
 }

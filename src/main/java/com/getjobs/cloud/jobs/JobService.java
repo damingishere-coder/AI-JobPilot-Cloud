@@ -31,12 +31,6 @@ public class JobService {
     private static final Set<String> STATUSES = Set.of("ACTIVE", "EXPIRED", "REMOVED");
     private static final Set<String> MATCH_DECISIONS = Set.of("APPLY", "REVIEW", "SKIP");
     private static final Set<String> MATCH_STATUSES = Set.of("PENDING", "PROCESSING", "SUCCEEDED", "FAILED");
-    private static final Map<String, String> SORT_COLUMNS = Map.of(
-            "lastSeenAt", "last_seen_at",
-            "createdAt", "created_at",
-            "salaryMinK", "salary_min_k",
-            "title", "title"
-    );
 
     private final JobRepository jobs;
     private final MatchRepository matches;
@@ -100,7 +94,7 @@ public class JobService {
         }
         JobModels.Query query = new JobModels.Query(
                 safePage, safeSize, normalizedPlatform, normalizedStatus, normalizedKeyword,
-                capturedFrom, capturedTo, orderBy(sort),
+                capturedFrom, capturedTo, parseSort(sort),
                 normalizedMatchDecision, normalizedMatchStatus, safeMinScore
         );
         return inTenant(userId, () -> {
@@ -188,24 +182,36 @@ public class JobService {
         return normalized;
     }
 
-    private String orderBy(String sort) {
+    /**
+     * Parses the client sort value into the finite {@link JobModels.JobSort}
+     * enum. The repository resolves the enum to pre-declared ORDER BY
+     * constants, so a client value can never reach SQL text.
+     */
+    static JobModels.JobSort parseSort(String sort) {
         String value = sort == null || sort.isBlank() ? "lastSeenAt,desc" : sort.trim();
         String[] parts = value.split(",", -1);
-        if (parts.length != 2 || !SORT_COLUMNS.containsKey(parts[0])) {
+        if (parts.length != 2) {
             throw validation("sort 参数不正确");
         }
         String direction = parts[1].toLowerCase(Locale.ROOT);
         if (!direction.equals("asc") && !direction.equals("desc")) {
             throw validation("sort 方向只能是 asc 或 desc");
         }
-        return SORT_COLUMNS.get(parts[0]) + " " + direction + " NULLS LAST, id ASC";
+        boolean ascending = "asc".equals(direction);
+        return switch (parts[0]) {
+            case "lastSeenAt" -> ascending ? JobModels.JobSort.LAST_SEEN_ASC : JobModels.JobSort.LAST_SEEN_DESC;
+            case "createdAt" -> ascending ? JobModels.JobSort.CREATED_ASC : JobModels.JobSort.CREATED_DESC;
+            case "salaryMinK" -> ascending ? JobModels.JobSort.SALARY_MIN_ASC : JobModels.JobSort.SALARY_MIN_DESC;
+            case "title" -> ascending ? JobModels.JobSort.TITLE_ASC : JobModels.JobSort.TITLE_DESC;
+            default -> throw validation("sort 参数不正确");
+        };
     }
 
     private <T> T inTenant(UUID userId, Supplier<T> work) {
         return transactions.execute(status -> tenants.execute(userId, work));
     }
 
-    private ApiException validation(String message) {
+    private static ApiException validation(String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
     }
 }

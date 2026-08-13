@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,14 +20,80 @@ import java.util.UUID;
 @Repository
 @Profile("api")
 public class JobRepository {
-    private static final String SUMMARY_COLUMNS = """
-            id, platform, title, company_name, salary_text, salary_min_k, salary_max_k,
-            salary_months, location, status, last_seen_at
-            """;
     private static final String DETAIL_COLUMNS = """
             id, platform, external_job_id, title, company_name, salary_text, salary_min_k,
             salary_max_k, salary_months, location, experience, degree, description, job_url,
             company_info::text, skills::text, welfare::text, status, source_captured_at, last_seen_at
+            """;
+
+    /**
+     * Fixed list/count SQL. Every filter is always present and guarded by a
+     * boolean bind parameter, so a request value can never change the SQL
+     * text; only JDBC bind values vary at runtime. Disabled filters bind
+     * explicit placeholder values because PostgreSQL cannot infer the type of
+     * a NULL bind. Match filters only consider each job's latest match
+     * (created_at DESC, id DESC), otherwise an old APPLY record would shadow
+     * a newer SKIP decision. The COUNT_SQL WHERE block must stay identical to
+     * the LIST_SQL WHERE block.
+     */
+    private static final String COUNT_SQL = """
+            SELECT count(*) FROM app.job_posts
+            WHERE user_id=:userId
+              AND (:filterPlatform=false OR platform=:platform)
+              AND (:filterStatus=false OR status=:status)
+              AND (:filterKeyword=false OR (title ILIKE :keyword OR company_name ILIKE :keyword OR location ILIKE :keyword))
+              AND (:filterCapturedFrom=false OR source_captured_at>=:capturedFrom)
+              AND (:filterCapturedTo=false OR source_captured_at<=:capturedTo)
+              AND (:filterMatch=false OR EXISTS (
+                    SELECT 1 FROM app.job_matches m
+                    WHERE m.job_post_id=app.job_posts.id
+                      AND m.user_id=:userId
+                      AND m.id=(SELECT latest.id FROM app.job_matches latest
+                                WHERE latest.user_id=:userId AND latest.job_post_id=app.job_posts.id
+                                ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
+                      AND (:filterMatchDecision=false OR m.decision=:matchDecision)
+                      AND (:filterMatchStatus=false OR m.status=:matchStatus)
+                      AND (:filterMinScore=false OR m.score>=:minScore)
+                  ))
+            """;
+
+    /**
+     * Sorting is resolved through the fixed CASE branches below: exactly one
+     * branch is non-NULL for the bound :sort key, every other branch is NULL
+     * (NULLS LAST), and id ASC is the stable tie-breaker.
+     */
+    private static final String LIST_SQL = """
+            SELECT id, platform, title, company_name, salary_text, salary_min_k, salary_max_k,
+                   salary_months, location, status, last_seen_at
+            FROM app.job_posts
+            WHERE user_id=:userId
+              AND (:filterPlatform=false OR platform=:platform)
+              AND (:filterStatus=false OR status=:status)
+              AND (:filterKeyword=false OR (title ILIKE :keyword OR company_name ILIKE :keyword OR location ILIKE :keyword))
+              AND (:filterCapturedFrom=false OR source_captured_at>=:capturedFrom)
+              AND (:filterCapturedTo=false OR source_captured_at<=:capturedTo)
+              AND (:filterMatch=false OR EXISTS (
+                    SELECT 1 FROM app.job_matches m
+                    WHERE m.job_post_id=app.job_posts.id
+                      AND m.user_id=:userId
+                      AND m.id=(SELECT latest.id FROM app.job_matches latest
+                                WHERE latest.user_id=:userId AND latest.job_post_id=app.job_posts.id
+                                ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
+                      AND (:filterMatchDecision=false OR m.decision=:matchDecision)
+                      AND (:filterMatchStatus=false OR m.status=:matchStatus)
+                      AND (:filterMinScore=false OR m.score>=:minScore)
+                  ))
+            ORDER BY
+              CASE WHEN :sort='LAST_SEEN_ASC' THEN last_seen_at END ASC NULLS LAST,
+              CASE WHEN :sort='LAST_SEEN_DESC' THEN last_seen_at END DESC NULLS LAST,
+              CASE WHEN :sort='CREATED_ASC' THEN created_at END ASC NULLS LAST,
+              CASE WHEN :sort='CREATED_DESC' THEN created_at END DESC NULLS LAST,
+              CASE WHEN :sort='SALARY_MIN_ASC' THEN salary_min_k END ASC NULLS LAST,
+              CASE WHEN :sort='SALARY_MIN_DESC' THEN salary_min_k END DESC NULLS LAST,
+              CASE WHEN :sort='TITLE_ASC' THEN title END ASC NULLS LAST,
+              CASE WHEN :sort='TITLE_DESC' THEN title END DESC NULLS LAST,
+              id ASC
+            LIMIT :limit OFFSET :offset
             """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -38,26 +105,67 @@ public class JobRepository {
     }
 
     public long count(UUID userId, JobModels.Query query) {
-        SqlParts parts = where(userId, query);
-        Long total = jdbc.queryForObject(
-                "SELECT count(*) FROM app.job_posts " + parts.where(),
-                parts.parameters(),
-                Long.class
-        );
+        Long total = jdbc.queryForObject(COUNT_SQL, parameters(userId, query), Long.class);
         return total == null ? 0 : total;
     }
 
     public List<JobModels.JobSummary> list(UUID userId, JobModels.Query query) {
-        SqlParts parts = where(userId, query);
-        MapSqlParameterSource parameters = parts.parameters()
+        MapSqlParameterSource parameters = parameters(userId, query)
                 .addValue("limit", query.size())
                 .addValue("offset", (query.page() - 1) * query.size());
-        return jdbc.query(
-                "SELECT " + SUMMARY_COLUMNS + " FROM app.job_posts " + parts.where()
-                        + " ORDER BY " + query.orderBy() + " LIMIT :limit OFFSET :offset",
-                parameters,
-                this::mapSummary
-        );
+        return jdbc.query(LIST_SQL, parameters, this::mapSummary);
+    }
+
+    /**
+     * Resolves the finite sort enum to the matching hard-coded CASE branch key
+     * inside the fixed LIST_SQL. The resolved key only ever travels as a bind
+     * parameter; no client text can reach the SQL string.
+     */
+    private static String sortKey(JobModels.JobSort sort) {
+        if (sort == null) {
+            return "LAST_SEEN_DESC";
+        }
+        return switch (sort) {
+            case LAST_SEEN_ASC -> "LAST_SEEN_ASC";
+            case LAST_SEEN_DESC -> "LAST_SEEN_DESC";
+            case CREATED_ASC -> "CREATED_ASC";
+            case CREATED_DESC -> "CREATED_DESC";
+            case SALARY_MIN_ASC -> "SALARY_MIN_ASC";
+            case SALARY_MIN_DESC -> "SALARY_MIN_DESC";
+            case TITLE_ASC -> "TITLE_ASC";
+            case TITLE_DESC -> "TITLE_DESC";
+        };
+    }
+
+    /**
+     * Binds every filter exactly once as an enable flag plus an explicit
+     * value. Disabled filters carry fixed placeholder values so PostgreSQL
+     * always sees a typed parameter, never NULL.
+     */
+    private static MapSqlParameterSource parameters(UUID userId, JobModels.Query query) {
+        MapSqlParameterSource parameters = new MapSqlParameterSource("userId", userId);
+        parameters.addValue("filterPlatform", query.platform() != null);
+        parameters.addValue("platform", query.platform() == null ? "" : query.platform());
+        parameters.addValue("filterStatus", query.status() != null);
+        parameters.addValue("status", query.status() == null ? "" : query.status());
+        parameters.addValue("filterKeyword", query.keyword() != null);
+        parameters.addValue("keyword", query.keyword() == null ? "" : "%" + query.keyword() + "%");
+        parameters.addValue("filterCapturedFrom", query.capturedFrom() != null);
+        parameters.addValue("capturedFrom", java.sql.Timestamp.from(
+                query.capturedFrom() == null ? Instant.EPOCH : query.capturedFrom()));
+        parameters.addValue("filterCapturedTo", query.capturedTo() != null);
+        parameters.addValue("capturedTo", java.sql.Timestamp.from(
+                query.capturedTo() == null ? Instant.EPOCH : query.capturedTo()));
+        boolean matchFilter = query.matchDecision() != null || query.matchStatus() != null || query.minScore() != null;
+        parameters.addValue("filterMatch", matchFilter);
+        parameters.addValue("filterMatchDecision", query.matchDecision() != null);
+        parameters.addValue("matchDecision", query.matchDecision() == null ? "" : query.matchDecision());
+        parameters.addValue("filterMatchStatus", query.matchStatus() != null);
+        parameters.addValue("matchStatus", query.matchStatus() == null ? "" : query.matchStatus());
+        parameters.addValue("filterMinScore", query.minScore() != null);
+        parameters.addValue("minScore", query.minScore() == null ? 0 : query.minScore());
+        parameters.addValue("sort", sortKey(query.sort()));
+        return parameters;
     }
 
     /**
@@ -93,54 +201,6 @@ public class JobRepository {
         } catch (EmptyResultDataAccessException ignored) {
             return Optional.empty();
         }
-    }
-
-    private SqlParts where(UUID userId, JobModels.Query query) {
-        StringBuilder sql = new StringBuilder("WHERE user_id=:userId");
-        MapSqlParameterSource parameters = new MapSqlParameterSource("userId", userId);
-        if (query.platform() != null) {
-            sql.append(" AND platform=:platform");
-            parameters.addValue("platform", query.platform());
-        }
-        if (query.status() != null) {
-            sql.append(" AND status=:status");
-            parameters.addValue("status", query.status());
-        }
-        if (query.keyword() != null) {
-            sql.append(" AND (title ILIKE :keyword OR company_name ILIKE :keyword OR location ILIKE :keyword)");
-            parameters.addValue("keyword", "%" + query.keyword() + "%");
-        }
-        if (query.capturedFrom() != null) {
-            sql.append(" AND source_captured_at>=:capturedFrom");
-            parameters.addValue("capturedFrom", query.capturedFrom());
-        }
-        if (query.capturedTo() != null) {
-            sql.append(" AND source_captured_at<=:capturedTo");
-            parameters.addValue("capturedTo", query.capturedTo());
-        }
-        if (query.matchDecision() != null || query.matchStatus() != null || query.minScore() != null) {
-            // Filters must only consider each job's latest match (created_at DESC, id DESC),
-            // otherwise an old APPLY record would shadow a newer SKIP decision.
-            sql.append(" AND EXISTS (SELECT 1 FROM app.job_matches m WHERE m.job_post_id=app.job_posts.id");
-            sql.append(" AND m.user_id=:userId");
-            sql.append(" AND m.id=(SELECT latest.id FROM app.job_matches latest");
-            sql.append(" WHERE latest.user_id=:userId AND latest.job_post_id=app.job_posts.id");
-            sql.append(" ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)");
-            if (query.matchDecision() != null) {
-                sql.append(" AND m.decision=:matchDecision");
-                parameters.addValue("matchDecision", query.matchDecision());
-            }
-            if (query.matchStatus() != null) {
-                sql.append(" AND m.status=:matchStatus");
-                parameters.addValue("matchStatus", query.matchStatus());
-            }
-            if (query.minScore() != null) {
-                sql.append(" AND m.score>=:minScore");
-                parameters.addValue("minScore", query.minScore());
-            }
-            sql.append(")");
-        }
-        return new SqlParts(sql.toString(), parameters);
     }
 
     private JobModels.JobSummary mapSummary(ResultSet rs, int row) throws SQLException {
@@ -206,8 +266,5 @@ public class JobRepository {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("无法读取岗位公司字段", exception);
         }
-    }
-
-    private record SqlParts(String where, MapSqlParameterSource parameters) {
     }
 }

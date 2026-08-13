@@ -401,12 +401,20 @@ class PluginDeliveryIntegrationTest {
             assertThat(events).contains("\"eventType\":\"" + event + "\"");
         }
         // Web list rows carry job, match, device and last event summaries
-        HttpResponse<String> list = userA.get("/api/delivery/tasks?status=SUCCEEDED");
+        HttpResponse<String> list = userA.get("/api/delivery/tasks?status=SUCCEEDED&sort=updatedAt,desc");
         assertThat(list.statusCode()).isEqualTo(200);
         assertThat(json(list).at("/data/items").toString()).contains(taskId.toString());
         assertThat(json(list).at("/data/items/0/job/platform").asText()).isEqualTo("BOSS");
         assertThat(json(list).at("/data/items/0/device/deviceName").asText()).isEqualTo("执行设备");
         assertThat(json(list).at("/data/items/0/lastEvent/eventType").asText()).isEqualTo("SUCCEEDED");
+        // Multi-status filter with collection parameter expansion
+        HttpResponse<String> multiStatus = userA.get("/api/delivery/tasks?status=SUCCEEDED&status=SKIPPED");
+        assertThat(multiStatus.statusCode()).isEqualTo(200);
+        assertThat(json(multiStatus).at("/data/items").toString()).contains(taskId.toString());
+        // Invalid sort stays a 400 validation error
+        HttpResponse<String> unsafeSort = userA.get("/api/delivery/tasks?sort=createdAt;drop%20table");
+        assertThat(unsafeSort.statusCode()).isEqualTo(400);
+        assertThat(json(unsafeSort).at("/error/code").asText()).isEqualTo("VALIDATION_ERROR");
 
         // Job pool integration shows the real delivery status
         HttpResponse<String> jobDetail = userA.get("/api/jobs/" + jobId);

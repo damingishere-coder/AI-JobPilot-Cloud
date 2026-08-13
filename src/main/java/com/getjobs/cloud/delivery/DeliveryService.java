@@ -12,6 +12,7 @@ import com.getjobs.cloud.delivery.DeliveryRepository.StartOutcome;
 import com.getjobs.cloud.delivery.DeliveryRepository.TaskDetailRow;
 import com.getjobs.cloud.delivery.DeliveryRepository.TaskListRow;
 import com.getjobs.cloud.delivery.DeliveryRepository.TaskQuery;
+import com.getjobs.cloud.delivery.DeliveryRepository.TaskSort;
 import com.getjobs.cloud.delivery.DeliveryRepository.TaskRecord;
 import com.getjobs.cloud.delivery.DeliveryRepository.TaskStatusRow;
 import com.getjobs.cloud.jobs.JobModels;
@@ -72,11 +73,6 @@ public class DeliveryService {
     private static final Set<String> PAGE_STATES = Set.of("SUCCESS_NOTICE", "ALREADY_DELIVERED");
     private static final Set<String> SKIPPABLE_STATUSES = Set.of(
             "PENDING_CONFIRMATION", "CONFIRMED", "PAUSED", "FAILED"
-    );
-    private static final Map<String, String> SORT_COLUMNS = Map.of(
-            "createdAt", "t.created_at",
-            "updatedAt", "t.updated_at",
-            "confirmedAt", "t.confirmed_at"
     );
     private static final int MAX_URL_LENGTH = 2000;
     private static final int MAX_MESSAGE_CODE_POINTS = 200;
@@ -270,7 +266,7 @@ public class DeliveryService {
         }
         TaskQuery query = new TaskQuery(
                 safePage, safeSize, normalizedStatuses, normalizedPlatform, normalizedKeyword,
-                createdFrom, createdTo, orderBy(sort)
+                createdFrom, createdTo, parseSort(sort)
         );
         return inTenant(userId, () -> {
             long total = tasks.count(userId, query);
@@ -1105,17 +1101,29 @@ public class DeliveryService {
         return normalized;
     }
 
-    private String orderBy(String sort) {
+    /**
+     * Parses the client sort value into the finite
+     * {@link DeliveryRepository.TaskSort} enum. The repository resolves the
+     * enum to pre-declared ORDER BY constants, so a client value can never
+     * reach SQL text.
+     */
+    static DeliveryRepository.TaskSort parseSort(String sort) {
         String value = sort == null || sort.isBlank() ? "createdAt,desc" : sort.trim();
         String[] parts = value.split(",", -1);
-        if (parts.length != 2 || !SORT_COLUMNS.containsKey(parts[0])) {
+        if (parts.length != 2) {
             throw validation("sort 参数不正确");
         }
         String direction = parts[1].toLowerCase(Locale.ROOT);
         if (!direction.equals("asc") && !direction.equals("desc")) {
             throw validation("sort 方向只能是 asc 或 desc");
         }
-        return SORT_COLUMNS.get(parts[0]) + " " + direction + " NULLS LAST, t.id ASC";
+        boolean ascending = "asc".equals(direction);
+        return switch (parts[0]) {
+            case "createdAt" -> ascending ? TaskSort.CREATED_ASC : TaskSort.CREATED_DESC;
+            case "updatedAt" -> ascending ? TaskSort.UPDATED_ASC : TaskSort.UPDATED_DESC;
+            case "confirmedAt" -> ascending ? TaskSort.CONFIRMED_ASC : TaskSort.CONFIRMED_DESC;
+            default -> throw validation("sort 参数不正确");
+        };
     }
 
     private <T> T inTenant(UUID userId, Supplier<T> work) {
@@ -1174,7 +1182,7 @@ public class DeliveryService {
         );
     }
 
-    private ApiException validation(String message) {
+    private static ApiException validation(String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
     }
 

@@ -4,7 +4,7 @@
 
 Cloud 模式现已提供注册、登录、退出、当前用户、角色拦截、CSRF、Redis Session、登录保护、安全审计和 `user_profiles` 行级隔离。Web 鉴权只使用服务端 Session，不引入 JWT。旧 Windows 本地启动器显式关闭前端认证守卫，并继续使用原 SQLite 入口。
 
-本轮不包含邮箱验证、找回密码、MFA、第三方登录、管理后台、资料编辑、额度业务或其他 SaaS 业务表。`GET /api/me` 的 `quotaSummary` 暂时为空，计划在第 9 轮接入额度数据。
+本轮不包含邮箱验证、找回密码、MFA、第三方登录、管理后台、资料编辑、额度业务或其他 SaaS 业务表。`POST /api/me` 的 `quotaSummary` 暂时为空，计划在第 9 轮接入额度数据。
 
 ## 数据库与隔离
 
@@ -40,7 +40,7 @@ Cookie 固定命名为 `AJP_SESSION`，使用 `HttpOnly`、`SameSite=Lax`、`Pat
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
-- `GET /api/me`（需要 `USER` 或 `ADMIN`）
+- `POST /api/me`（需要 `USER` 或 `ADMIN`，且必须携带 Session 对应的 CSRF Token）
 
 响应统一为 `{ success, data/error, requestId }`。稳定认证错误码包括 `AUTH_REQUIRED`、`INVALID_CREDENTIALS`、`ACCOUNT_LOCKED`、`ACCOUNT_DISABLED`、`CSRF_INVALID`、`RATE_LIMITED`、`VALIDATION_ERROR` 和 `EMAIL_ALREADY_REGISTERED`。JSON 未知字段会被拒绝，因此客户端不能通过 `user_id`、`role` 或 `status` 注入身份。
 

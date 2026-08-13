@@ -42,6 +42,10 @@ function apiResponse(data: unknown, status = 200) {
   })
 }
 
+function csrfResponse(token = "csrf-fresh") {
+  return apiResponse({ success: true, data: { csrfToken: token }, requestId: "request-csrf" })
+}
+
 function MeAndAction({ action }: { action: "expire" | "csrf" | "logout" }) {
   const auth = useAuth()
   const run = async () => {
@@ -85,8 +89,37 @@ describe("Cloud 认证上下文与路由守卫", () => {
     expect(screen.queryByText("受保护内容")).not.toBeInTheDocument()
   })
 
+  it("启动刷新先取 CSRF 再以 POST /api/me 带 Token 请求当前用户", async () => {
+    const meRequests: { method: string; csrf: string }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/api/auth/csrf")) {
+        return csrfResponse("csrf-for-me")
+      }
+      if (url.endsWith("/api/me")) {
+        meRequests.push({
+          method: init?.method ?? "GET",
+          csrf: (init?.headers as Headers).get("X-CSRF-TOKEN") ?? "",
+        })
+        return apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" })
+      }
+      throw new Error("意外请求：" + url)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(
+      <AuthProvider>
+        <AppShell><MeAndAction action="logout" /></AppShell>
+      </AuthProvider>,
+    )
+
+    expect(await screen.findByText("te***@example.com")).toBeInTheDocument()
+    expect(meRequests).toEqual([{ method: "POST", csrf: "csrf-for-me" }])
+  })
+
   it("Session 过期后的 401 会清理用户并跳转登录", async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(csrfResponse("csrf-for-me"))
       .mockResolvedValueOnce(apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" }))
       .mockResolvedValueOnce(apiResponse({
         success: false,
@@ -116,7 +149,7 @@ describe("Cloud 认证上下文与路由守卫", () => {
         return apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" })
       }
       if (url.endsWith("/api/auth/csrf")) {
-        return apiResponse({ success: true, data: { csrfToken: "csrf-refreshed" }, requestId: "request-csrf" })
+        return csrfResponse("csrf-refreshed")
       }
       if (url.endsWith("/api/protected")) {
         protectedAttempts++
@@ -148,6 +181,7 @@ describe("Cloud 认证上下文与路由守卫", () => {
 
   it("退出成功后清理内存中的当前用户", async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(csrfResponse("csrf-for-me"))
       .mockResolvedValueOnce(apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" }))
       .mockResolvedValueOnce(apiResponse({
         success: true,
@@ -165,7 +199,7 @@ describe("Cloud 认证上下文与路由守卫", () => {
     expect(await screen.findByText("te***@example.com")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "执行" }))
     expect(await screen.findByText("anonymous")).toBeInTheDocument()
-    const logoutInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    const logoutInit = fetchMock.mock.calls[2]?.[1] as RequestInit
     expect((logoutInit.headers as Headers).get("X-CSRF-TOKEN")).toBe("csrf-from-me")
   })
 })

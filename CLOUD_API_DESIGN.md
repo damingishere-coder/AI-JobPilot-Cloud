@@ -125,12 +125,12 @@
 - **user_id 隔离**：仅注销当前 Session，不撤销用户其他设备或插件 Token。
 - **插件 Token**：不允许。
 
-### `GET /api/me`
+### `POST /api/me`
 
 - **请求参数**：无。
 - **响应结构**：`200`，`data: { id, emailMasked, status, profile, quotaSummary, sessionExpiresAt, csrfToken }`。
-- **权限要求**：Web Session。
-- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`RATE_LIMITED`。
+- **权限要求**：Web Session + CSRF；前端先调用 `GET /api/auth/csrf`，再以 `X-CSRF-TOKEN` 请求本接口。
+- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`CSRF_INVALID`、`RATE_LIMITED`。
 - **user_id 隔离**：只按 Session 中的 `user_id` 查询，绝不按 Query 参数切换用户。
 - **插件 Token**：不允许；插件身份使用 `/api/plugin/me`。
 

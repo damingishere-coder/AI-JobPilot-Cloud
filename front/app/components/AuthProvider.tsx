@@ -61,7 +61,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null
     }
     try {
-      const data = await cloudApiRequest<MePayload>("/api/me")
+      // /api/me is a CSRF-protected POST: fetch the session token first, then
+      // carry it on the request so Spring Security's CsrfFilter validates it.
+      const csrfToken = await fetchCsrf()
+      const data = await cloudApiRequest<MePayload>(
+        "/api/me",
+        { method: "POST" },
+        csrfToken,
+      )
       csrfRef.current = data.csrfToken
       const currentUser: AuthUser = {
         id: data.id,
@@ -82,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [fetchCsrf])
 
   useEffect(() => {
     if (!cloudAuthEnabled) {

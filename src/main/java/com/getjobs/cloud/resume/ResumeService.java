@@ -17,9 +17,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Clock;
@@ -32,6 +32,16 @@ import java.util.function.Supplier;
 @Service
 @Profile("api")
 public class ResumeService {
+    private static final int AES_GCM_NONCE_BYTES = 12;
+    private static final int AES_GCM_TAG_BYTES = 16;
+    /**
+     * Compile-time upper bound of the packed stored payload: the 10 MiB
+     * plaintext cap plus the fixed AES-GCM tag and nonce overhead. No
+     * arithmetic on request-derived lengths ever reaches an allocation.
+     */
+    private static final int MAX_PACKED_BYTES =
+            ResumeFileValidator.MAX_BYTES + AES_GCM_NONCE_BYTES + AES_GCM_TAG_BYTES;
+
     private final ResumeRepository resumes;
     private final ResumeFileValidator validator;
     private final MalwareScanner malwareScanner;
@@ -263,11 +273,35 @@ public class ResumeService {
         }
     }
 
-    private byte[] pack(DataEncryptionService.EncryptedData encrypted) {
-        return ByteBuffer.allocate(encrypted.nonce().length + encrypted.ciphertext().length)
-                .put(encrypted.nonce())
-                .put(encrypted.ciphertext())
-                .array();
+    /**
+     * Serializes nonce || ciphertext into the stored blob. Each array is
+     * bounds-checked against the AES-GCM contract before any write; the
+     * backing buffer is a fixed-capacity stream capped by {@link #MAX_PACKED_BYTES},
+     * so no attacker-influenced length arithmetic ever reaches an allocation.
+     */
+    static byte[] pack(DataEncryptionService.EncryptedData encrypted) {
+        byte[] nonce = encrypted.nonce();
+        byte[] ciphertext = encrypted.ciphertext();
+        if (nonce == null || nonce.length != AES_GCM_NONCE_BYTES) {
+            throw packingFailure();
+        }
+        if (ciphertext == null || ciphertext.length == 0) {
+            throw packingFailure();
+        }
+        // A well-formed AES-GCM output of a bounded plaintext never exceeds the
+        // plaintext cap plus the fixed 16-byte tag.
+        if (ciphertext.length > ResumeFileValidator.MAX_BYTES + AES_GCM_TAG_BYTES) {
+            throw packingFailure();
+        }
+        ByteArrayOutputStream packed = new ByteArrayOutputStream(MAX_PACKED_BYTES);
+        packed.write(nonce, 0, nonce.length);
+        packed.write(ciphertext, 0, ciphertext.length);
+        return packed.toByteArray();
+    }
+
+    /** Stable, non-sensitive server error: never carries or logs ciphertext details. */
+    private static ApiException packingFailure() {
+        return new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "服务暂时无法处理请求");
     }
 
     private void safeDelete(String storageKey) {

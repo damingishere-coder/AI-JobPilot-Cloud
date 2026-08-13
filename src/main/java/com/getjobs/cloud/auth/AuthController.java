@@ -51,7 +51,12 @@ public class AuthController {
     public ApiResponse<AuthApiModels.CsrfPayload> csrf(CsrfToken token, HttpServletRequest request) {
         RequestMetadata metadata = RequestMetadata.from(request);
         rateLimiter.checkCsrf(metadata.remoteAddress());
-        request.getSession(true).setMaxInactiveInterval(Math.toIntExact(properties.getPreAuthSessionTimeout().toSeconds()));
+        // Bound only fresh anonymous sessions: token refreshes on an existing
+        // (authenticated) session must not shorten its configured lifetime.
+        HttpSession session = request.getSession(true);
+        if (session.isNew()) {
+            session.setMaxInactiveInterval(Math.toIntExact(properties.getPreAuthSessionTimeout().toSeconds()));
+        }
         return ApiResponse.success(new AuthApiModels.CsrfPayload(token.getToken()));
     }
 
@@ -100,7 +105,12 @@ public class AuthController {
         return ApiResponse.success(new AuthApiModels.LogoutPayload(true));
     }
 
-    @GetMapping("/api/me")
+    /**
+     * Session self-check. POST (not GET) so the request goes through Spring
+     * Security's {@code CsrfFilter} instead of relying on a hand-written token
+     * comparison; the session chain may read/refresh session state on access.
+     */
+    @PostMapping("/api/me")
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
     public ApiResponse<AuthApiModels.MePayload> me(
             CsrfToken csrfToken,

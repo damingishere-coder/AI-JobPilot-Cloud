@@ -127,19 +127,37 @@ class AuthSystemIntegrationTest {
         );
         assertThat(storedHash).startsWith("$argon2").doesNotContain("StrongPassword!2026");
 
-        HttpResponse<String> me = browser.get("/api/me");
+        String authenticatedCsrf = json(register).at("/data/csrfToken").asText();
+        HttpResponse<String> me = browser.post("/api/me", "", authenticatedCsrf);
         assertThat(me.statusCode()).isEqualTo(200);
         assertThat(json(me).at("/data/emailMasked").asText()).isEqualTo("ro***@example.com");
         assertThat(json(me).at("/data/profile/timezone").asText()).isEqualTo("Asia/Shanghai");
         assertThat(json(me).at("/data/quotaSummary").isArray()).isTrue();
-        HttpResponse<String> injectedUserId = browser.get("/api/me?user_id=" + UUID.randomUUID());
+
+        // POST /api/me is CSRF-protected: missing or wrong token is rejected
+        // by Spring Security's CsrfFilter, a valid token succeeds.
+        HttpResponse<String> meMissingCsrf = browser.post("/api/me", "", null);
+        assertThat(meMissingCsrf.statusCode()).isEqualTo(403);
+        assertThat(json(meMissingCsrf).at("/error/code").asText()).isEqualTo("CSRF_INVALID");
+        HttpResponse<String> meWrongCsrf = browser.post("/api/me", "", "not-the-session-token");
+        assertThat(meWrongCsrf.statusCode()).isEqualTo(403);
+        assertThat(json(meWrongCsrf).at("/error/code").asText()).isEqualTo("CSRF_INVALID");
+
+        // The old GET route is gone: GET /api/me never returns session state.
+        HttpResponse<String> meGet = browser.get("/api/me");
+        assertThat(meGet.statusCode()).isNotEqualTo(200);
+        assertThat(meGet.body()).doesNotContain("ro***@example.com");
+
+        HttpResponse<String> injectedUserId = browser.post(
+                "/api/me?user_id=" + UUID.randomUUID(), "", authenticatedCsrf
+        );
         assertThat(injectedUserId.statusCode()).isEqualTo(400);
         assertThat(json(injectedUserId).at("/error/code").asText()).isEqualTo("USER_ID_NOT_ALLOWED");
 
-        String authenticatedCsrf = json(register).at("/data/csrfToken").asText();
         HttpResponse<String> logout = browser.post("/api/auth/logout", "", authenticatedCsrf);
         assertThat(logout.statusCode()).as(logout.body()).isEqualTo(200);
-        assertThat(browser.get("/api/me").statusCode()).isEqualTo(401);
+        String anonymousCsrf = browser.csrf();
+        assertThat(browser.post("/api/me", "", anonymousCsrf).statusCode()).isEqualTo(401);
         assertThat(browser.post("/api/auth/logout", "", null).statusCode()).isEqualTo(200);
 
         String loginCsrf = browser.csrf();
@@ -218,7 +236,11 @@ class AuthSystemIntegrationTest {
                 "SELECT status FROM app.users WHERE email='locked@example.com'::citext",
                 String.class
         )).isEqualTo("LOCKED");
-        assertThat(activeSession.get("/api/me").statusCode()).isEqualTo(401);
+        // The lock operation revokes the old Redis session. Match the real
+        // frontend refresh flow by first creating a fresh anonymous CSRF
+        // session, then verify that /api/me reports the missing login.
+        String activeSessionCsrf = activeSession.csrf();
+        assertThat(activeSession.post("/api/me", "", activeSessionCsrf).statusCode()).isEqualTo(401);
 
         jdbc.update(
                 "UPDATE app.users SET locked_until = now() - interval '1 second' " +
@@ -289,7 +311,8 @@ class AuthSystemIntegrationTest {
         );
         assertThat(disabledRegistration.statusCode()).isEqualTo(201);
         jdbc.update("UPDATE app.users SET status='DISABLED' WHERE email='disabled@example.com'::citext");
-        assertThat(disabled.get("/api/me").statusCode()).isEqualTo(403);
+        String disabledCsrf = json(disabledRegistration).at("/data/csrfToken").asText();
+        assertThat(disabled.post("/api/me", "", disabledCsrf).statusCode()).isEqualTo(403);
 
         BrowserSession disabledLogin = new BrowserSession();
         HttpResponse<String> denied = disabledLogin.post(

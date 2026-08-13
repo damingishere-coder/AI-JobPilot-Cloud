@@ -53,6 +53,18 @@ public final class JobModels {
     ) {
     }
 
+    /**
+     * Finite sort key for the job list. The repository resolves each value to a
+     * pre-declared ORDER BY constant; no free-form SQL string is ever passed
+     * through this type.
+     */
+    enum JobSort {
+        LAST_SEEN_ASC, LAST_SEEN_DESC,
+        CREATED_ASC, CREATED_DESC,
+        SALARY_MIN_ASC, SALARY_MIN_DESC,
+        TITLE_ASC, TITLE_DESC
+    }
+
     record Query(
             int page,
             int size,
@@ -61,7 +73,7 @@ public final class JobModels {
             String keyword,
             Instant capturedFrom,
             Instant capturedTo,
-            String orderBy,
+            JobSort sort,
             String matchDecision,
             String matchStatus,
             Integer minScore
