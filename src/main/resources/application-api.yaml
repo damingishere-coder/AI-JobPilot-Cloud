@@ -52,6 +52,9 @@ app:
     bind-ip-window: 10m
     bind-code-attempt-limit: 5
     last-seen-update-interval-seconds: 60
+    # 精确扩展 Origin 白名单（公开信息，非秘密）；开发默认值等于 manifest 公钥
+    # 派生的固定开发扩展 ID。只接受 chrome-extension://[a-p]{32}，不支持通配符。
+    allowed-extension-origins: ${PLUGIN_ALLOWED_EXTENSION_ORIGINS:chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc}
   delivery:
     lease-seconds: ${DELIVERY_LEASE_SECONDS:600}
     max-attempts: ${DELIVERY_MAX_ATTEMPTS:3}

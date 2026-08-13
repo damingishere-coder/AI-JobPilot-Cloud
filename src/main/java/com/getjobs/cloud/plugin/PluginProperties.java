@@ -6,6 +6,8 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Configuration for the browser-plugin binding and token infrastructure.
@@ -46,6 +48,16 @@ public class PluginProperties {
 
     /** Minimum interval between last_seen/last_used database writes. */
     private int lastSeenUpdateIntervalSeconds = 60;
+
+    /**
+     * Exact extension origins allowed to call the plugin API via CORS.
+     * The development default is the fixed development extension ID derived from
+     * the committed manifest public key; production values come from the
+     * PLUGIN_ALLOWED_EXTENSION_ORIGINS environment variable.
+     */
+    private List<String> allowedExtensionOrigins = List.of(
+            "chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc"
+    );
 
     public Duration getBindCodeTtl() {
         return bindCodeTtl;
@@ -137,5 +149,36 @@ public class PluginProperties {
 
     public void setLastSeenUpdateIntervalSeconds(int lastSeenUpdateIntervalSeconds) {
         this.lastSeenUpdateIntervalSeconds = Math.max(5, Math.min(lastSeenUpdateIntervalSeconds, 3600));
+    }
+
+    public List<String> getAllowedExtensionOrigins() {
+        return allowedExtensionOrigins;
+    }
+
+    /**
+     * Non-empty entries must be strict {@code chrome-extension://[a-p]{32}}
+     * origins; wildcards and URL patterns are rejected outright. Blank entries
+     * are filtered out; an empty list means no extension origin is allowed.
+     * An invalid value aborts startup binding instead of silently widening the
+     * allowlist or disabling the plugin API.
+     */
+    public void setAllowedExtensionOrigins(List<String> allowedExtensionOrigins) {
+        List<String> normalized = new ArrayList<>();
+        if (allowedExtensionOrigins != null) {
+            for (String raw : allowedExtensionOrigins) {
+                String value = raw == null ? "" : raw.trim();
+                if (value.isEmpty()) {
+                    continue;
+                }
+                if (!value.matches("chrome-extension://[a-p]{32}")) {
+                    throw new IllegalArgumentException(
+                            "PLUGIN_ALLOWED_EXTENSION_ORIGINS 只允许精确的 chrome-extension://<32位a-p扩展ID>，"
+                                    + "不支持通配符或模式"
+                    );
+                }
+                normalized.add(value);
+            }
+        }
+        this.allowedExtensionOrigins = List.copyOf(normalized);
     }
 }

@@ -15,6 +15,11 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 /**
  * Stateless plugin-token security chain. It matches only the plugin-facing
@@ -41,17 +46,45 @@ public class PluginSecurityConfiguration {
         return registration;
     }
 
+    /**
+     * Cloud plugin CORS: only the exact development extension origin from
+     * {@link PluginProperties#getAllowedExtensionOrigins()} (or configured
+     * production values), only the plugin paths, only the actually used
+     * methods/headers. The plugin API never uses cookies, so
+     * {@code allowCredentials=false}. This replaces the legacy
+     * {@code chrome-extension://*} pattern that must not be reused in Cloud.
+     */
+    @Bean
+    CorsConfigurationSource pluginCorsConfigurationSource(PluginProperties properties) {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(properties.getAllowedExtensionOrigins());
+        configuration.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key"));
+        configuration.setAllowCredentials(false);
+        configuration.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/plugin/bind", configuration);
+        source.registerCorsConfiguration("/api/plugin/me", configuration);
+        source.registerCorsConfiguration("/api/plugin/tasks/**", configuration);
+        return source;
+    }
+
     @Bean
     @Order(1)
     SecurityFilterChain pluginSecurityFilterChain(
             HttpSecurity http,
             PluginTokenAuthenticationFilter tokenFilter,
-            SecurityResponseWriter responses
+            SecurityResponseWriter responses,
+            CorsConfigurationSource pluginCorsConfigurationSource
     ) throws Exception {
         http.securityMatcher(
                         "/api/plugin/bind",
                         "/api/plugin/me",
                         "/api/plugin/tasks/**")
+                // Preflight OPTIONS is answered by Spring Security's CORS filter
+                // before the token filter, so a valid preflight never becomes a 401.
+                .cors(cors -> cors.configurationSource(pluginCorsConfigurationSource))
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .securityContext(context -> context.securityContextRepository(new NullSecurityContextRepository()))

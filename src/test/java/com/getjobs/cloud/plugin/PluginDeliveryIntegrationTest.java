@@ -218,6 +218,52 @@ class PluginDeliveryIntegrationTest {
         ).statusCode()).isEqualTo(404);
     }
 
+    // ---- 1b. CORS preflight is answered before the token filter ----
+
+    @Test
+    void corsPreflightIsAnsweredBeforeTheTokenFilterAndWrongOriginsAreRejected() throws Exception {
+        String devOrigin = "chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc";
+        HttpClient corsClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        String startPath = "/api/plugin/tasks/" + UUID.randomUUID() + "/start";
+
+        // 正确开发 Origin + POST + 三个契约头：预检必须 200 并回显精确 Origin，
+        // 且不会落到 Token filter 变成 PLUGIN_TOKEN_INVALID。
+        HttpRequest preflight = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + startPath))
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .header("Origin", devOrigin)
+                .header("Access-Control-Request-Method", "POST")
+                .header("Access-Control-Request-Headers", "authorization, content-type, idempotency-key")
+                .build();
+        HttpResponse<String> response = corsClient.send(preflight, HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).contains(devOrigin);
+        assertThat(response.headers().firstValue("Access-Control-Allow-Methods").orElse(""))
+                .contains("POST").contains("OPTIONS");
+        assertThat(response.headers().firstValue("Access-Control-Allow-Headers").orElse(""))
+                .contains("authorization").contains("content-type").contains("idempotency-key");
+        assertThat(response.body()).doesNotContain("PLUGIN_TOKEN_INVALID");
+
+        // 错误扩展 Origin 的预检被拒绝，且不放行任何 CORS 头。
+        HttpResponse<String> rejected = corsClient.send(HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + startPath))
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .header("Origin", "chrome-extension://abcdefghijklmnopabcdefghijklmnop")
+                .header("Access-Control-Request-Method", "POST")
+                .build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(rejected.statusCode()).isNotEqualTo(200);
+        assertThat(rejected.headers().firstValue("Access-Control-Allow-Origin")).isEmpty();
+
+        // 实际请求仍然走 Token 鉴权：无 Token 的 GET pending 是 401，证明 CORS 不是鉴权。
+        HttpResponse<String> pending = corsClient.send(
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/plugin/tasks/pending"))
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(pending.statusCode()).isEqualTo(401);
+        assertThat(json(pending).at("/error/code").asText()).isEqualTo("PLUGIN_TOKEN_INVALID");
+    }
+
     // ---- 2. Web delivery create/greeting/confirm + plugin execute ----
 
     @Test

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>投递牛马 Cloud Bridge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="popup">
+    <header class="header">
+      <h1>投递牛马 Cloud Bridge</h1>
+      <p class="subtitle">本地投递执行器</p>
+    </header>
+
+    <section id="bind-section" class="section hidden">
+      <label class="field">
+        <span>云端 API 地址</span>
+        <select id="api-base-select"></select>
+      </label>
+      <label class="field">
+        <span>绑定码（在网页后台申请）</span>
+        <input id="bind-code-input" type="text" maxlength="11" placeholder="XXXXX-XXXXX" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span>设备显示名</span>
+        <input id="device-name-input" type="text" maxlength="100" placeholder="例如：我的 Chrome" autocomplete="off" />
+      </label>
+      <button id="bind-button" class="primary" type="button">绑定本机设备</button>
+    </section>
+
+    <section id="status-section" class="section hidden">
+      <div class="status-card">
+        <p class="status-line"><span class="dot ok" id="status-dot"></span><span id="status-text">已连接</span></p>
+        <dl>
+          <dt>设备</dt><dd id="device-name"></dd>
+          <dt>浏览器</dt><dd id="device-browser"></dd>
+          <dt>扩展版本</dt><dd id="device-extension"></dd>
+          <dt>凭证有效期至</dt><dd id="token-expires"></dd>
+        </dl>
+      </div>
+      <button id="unbind-button" class="danger" type="button">解除本机绑定</button>
+      <p class="hint">解除绑定只清除本机保存的凭证与执行状态；如需服务端撤销设备，请在网页后台「设备管理」中操作。</p>
+    </section>
+
+    <section id="message-section" class="section">
+      <p id="message" class="message hidden"></p>
+    </section>
+  </main>
+  <script src="cloud-client.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
