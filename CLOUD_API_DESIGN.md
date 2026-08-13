@@ -125,12 +125,12 @@
 - **user_id 隔离**：仅注销当前 Session，不撤销用户其他设备或插件 Token。
 - **插件 Token**：不允许。
 
-### `GET /api/me`
+### `POST /api/me`
 
 - **请求参数**：无。
 - **响应结构**：`200`，`data: { id, emailMasked, status, profile, quotaSummary, sessionExpiresAt, csrfToken }`。
-- **权限要求**：Web Session。
-- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`RATE_LIMITED`。
+- **权限要求**：Web Session + CSRF；前端先调用 `GET /api/auth/csrf`，再以 `X-CSRF-TOKEN` 请求本接口。
+- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`CSRF_INVALID`、`RATE_LIMITED`。
 - **user_id 隔离**：只按 Session 中的 `user_id` 查询，绝不按 Query 参数切换用户。
 - **插件 Token**：不允许；插件身份使用 `/api/plugin/me`。
 
@@ -138,11 +138,19 @@
 
 ### `POST /api/resumes/upload`
 
-- **请求参数**：`multipart/form-data`：`file`（第一版允许 PDF/DOCX 等明确白名单）、可选 `setCurrent=true`。服务端校验魔数、MIME、扩展名、大小和页数。
-- **响应结构**：`202`，`data: { id, originalFilename, contentType, fileSize, parseStatus: "UPLOADED", isCurrent, createdAt }`。解析可异步进行。
+- **请求参数**：`multipart/form-data`：`file`（PDF、DOCX、TXT）、可选 `setCurrent=true`，必须携带 `Idempotency-Key`。服务端先执行 ClamAV 扫描，再校验魔数、MIME、扩展名、10 MiB 大小、PDF 页数和 DOCX 解压边界。
+- **响应结构**：`202`，`data: { resume: { id, originalFilename, contentType, fileSize, parseStatus: "UPLOADED", current, version, createdAt }, deduplicated }`。解析由 Worker 异步进行。
 - **权限要求**：Web Session + CSRF。
 - **主要错误码**：`UNSUPPORTED_MEDIA_TYPE`、`PAYLOAD_TOO_LARGE`、`FILE_SIGNATURE_INVALID`(422)、`MALWARE_SUSPECTED`(422)、`QUOTA_EXCEEDED`、`STORAGE_UNAVAILABLE`(503)。
 - **user_id 隔离**：存储键由服务端生成，数据库写当前 `user_id`；设置当前简历在同一事务完成。
+- **插件 Token**：不允许。
+
+### `GET /api/resumes`
+
+- **请求参数**：Query `page`、`size`，页大小最大 100。
+- **响应结构**：`200`，返回当前用户未删除简历的分页元数据，不返回提取文本。
+- **权限要求**：Web Session。
+- **user_id 隔离**：列表与计数均使用当前 Session 用户并受 RLS 二次约束。
 - **插件 Token**：不允许。
 
 ### `GET /api/resumes/current`
@@ -156,7 +164,7 @@
 
 ### `DELETE /api/resumes/:id`
 
-- **请求参数**：Path `id`；JSON 可选 `{ "version": 3 }` 或使用 `If-Match`；需 `Idempotency-Key`。
+- **请求参数**：Path `id`；必须使用 `If-Match` 传当前版本，并携带 `Idempotency-Key`。
 - **响应结构**：`202`，`data: { id, deletionStatus: "SCHEDULED", deletedAt }`。后台删除原文件和派生文本。
 - **权限要求**：Web Session + CSRF。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`RESOURCE_VERSION_CONFLICT`、`RESUME_IN_USE`(409)、`IDEMPOTENCY_CONFLICT`。
@@ -234,7 +242,7 @@
 
 ### `GET /api/jobs`
 
-- **请求参数**：Query `page`、`size`、`platform`、`status`、`matchDecision`、`minScore`、`keyword`、`capturedFrom`、`capturedTo`、`sort`（白名单字段）。
+- **请求参数**：Query `page`、`size`、`platform`、`status`、`keyword`、`capturedFrom`、`capturedTo`、`sort`（白名单字段）。`matchDecision` 和 `minScore` 随阶段 5 AI 匹配实现。
 - **响应结构**：分页 `items`，每项 `{ id, platform, title, companyName, salary, location, status, latestMatchSummary, deliveryTaskStatus, lastSeenAt }`。
 - **权限要求**：Web Session。
 - **主要错误码**：`VALIDATION_ERROR`、`AUTH_REQUIRED`、`RATE_LIMITED`。

@@ -11,6 +11,8 @@ config.yaml
 .idea
 *.sh
 !start_docker.sh
+!docker/**/*.sh
+!scripts/*.sh
 CLAUDE.md
 .claude
 nul
@@ -54,6 +56,8 @@ cookie.json
 !.env.example
 .env.local
 front/.env.local
+.secrets/
+backups/
 chromedriver
 *.jpg
 chrome-profile/
@@ -63,7 +67,7 @@ chrome-profile/
 db/
 !src/main/resources/db/
 !src/main/resources/db/migration/
-!src/main/resources/db/migration/*.sql
+!src/main/resources/db/migration/**/*.sql
 *.db
 *.sqlite
 *.sqlite3

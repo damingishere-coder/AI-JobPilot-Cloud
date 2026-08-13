@@ -1,0 +1,83 @@
+spring:
+  config:
+    activate:
+      on-profile: cloud
+    import: optional:configtree:/run/secrets/
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/ai_jobpilot?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true}
+    username: jobpilot_app
+    password: ${db_app_password:${DB_APP_PASSWORD:}}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
+      schema: app
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:default}
+      password: ${redis_password:${REDIS_PASSWORD:}}
+      database: ${REDIS_DATABASE:0}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:3s}
+      timeout: ${REDIS_COMMAND_TIMEOUT:3s}
+  flyway:
+    enabled: false
+  sql:
+    init:
+      mode: never
+
+app:
+  role: ${APP_ROLE:api}
+  data-encryption:
+    key: ${data_encryption_key:${APP_DATA_ENCRYPTION_KEY:}}
+    key-id: ${APP_DATA_ENCRYPTION_KEY_ID:v1}
+    allow-ephemeral-key: false
+  ai-match:
+    enabled: false
+    provider: openai
+    model: gpt-4.1-mini
+    base-url: https://api.openai.com/v1
+    prompt-version: v1
+    # api-key: intentionally absent from API profile — only Worker needs it
+    timeout:
+      connect: 10000
+      request: 90000
+  storage:
+    type: ${APP_STORAGE_TYPE:local}
+    local-root: ${APP_STORAGE_LOCAL_ROOT:/var/lib/ai-jobpilot/private}
+    s3:
+      bucket: ${S3_BUCKET:}
+      region: ${S3_REGION:ap-east-1}
+      endpoint: ${S3_ENDPOINT:}
+      path-style-access: ${S3_PATH_STYLE_ACCESS:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+      discovery:
+        enabled: false
+    jmx:
+      exposure:
+        exclude: "*"
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+          additional-path: server:/livez
+        readiness:
+          include: readinessState,db,redis,storage
+          additional-path: server:/readyz
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      role: ${app.role}

@@ -1,3 +1,7 @@
+if (typeof importScripts === "function") {
+  importScripts("cloud-client.js");
+}
+
 const PLATFORM_CONFIG = {
   boss: {
     hosts: ["zhipin.com"],
@@ -44,7 +48,9 @@ const BOSS_LOCAL_API_MAX_ATTEMPTS = 3;
 const BOSS_LOCAL_API_TIMEOUT_MS = 30000;
 const ALLOWED_PAGE_ORIGINS = new Set([
   "http://localhost:6866",
-  "http://127.0.0.1:6866"
+  "http://127.0.0.1:6866",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080"
 ]);
 const ALLOWED_PAGE_MESSAGE_TYPES = new Set([
   "GET_JOBS_EXTENSION_PING",
@@ -61,7 +67,8 @@ const ALLOWED_PAGE_MESSAGE_TYPES = new Set([
   "ZHILIAN_SCAN_START",
   "ZHILIAN_SCAN_STOP",
   "ZHILIAN_DELIVER_ONE",
-  "ZHILIAN_DELIVER_BATCH"
+  "ZHILIAN_DELIVER_BATCH",
+  "CLOUD_DELIVERY_WAKE"
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -546,6 +553,10 @@ async function handlePageMessage(message, sender) {
 
   if (message.type === "GET_JOBS_EXTENSION_PING") {
     return { success: true, message: "Chrome扩展已连接", version: BACKGROUND_VERSION };
+  }
+
+  if (message.type === "CLOUD_DELIVERY_WAKE") {
+    return await handleCloudDeliveryWake(message, sender);
   }
 
   const platform = message.platform || inferPlatform(message.type);
@@ -1691,4 +1702,420 @@ function buildContentScriptError(platform, error, operation = "扫描") {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------- Cloud 投递执行
+//
+// 只有 Web 用户逐条确认后网页才显式发送一次 CLOUD_DELIVERY_WAKE。这里没有
+// 定时轮询循环、告警定时器或启动自动领取；浏览器或 Service Worker 重启后必须
+// 等用户再次显式唤醒才恢复。同一时刻只执行一个 Cloud 投递任务：相同 taskId 的
+// 重复唤醒恢复同一执行，不同 taskId 返回 PLUGIN_BUSY。
+
+let activeCloudRun = null;
+
+function cloudClient() {
+  return globalThis.GetJobsCloudClient || null;
+}
+
+async function handleCloudDeliveryWake(message, sender) {
+  const Cloud = cloudClient();
+  if (!Cloud) {
+    return { success: false, code: "VALIDATION_ERROR", message: "云端执行模块未加载，请重新加载扩展" };
+  }
+  const normalized = Cloud.normalizeWakeMessage(message);
+  if (!normalized.success) {
+    return { success: false, code: normalized.code, message: normalized.message };
+  }
+  const taskId = normalized.taskId;
+
+  // 离线/未绑定/Token 缺失：后端任务保持 CONFIRMED，这里只报告稳定状态，
+  // 不轮询、不静默重试、不替用户 skip/confirm。
+  const bound = await Cloud.readBoundState();
+  if (!bound) {
+    return {
+      success: false,
+      accepted: false,
+      taskId,
+      state: "unbound",
+      code: "PLUGIN_NOT_BOUND",
+      message: "插件尚未绑定云端设备，请点击扩展图标完成绑定"
+    };
+  }
+
+  if (activeCloudRun) {
+    if (activeCloudRun.taskId === taskId) {
+      return {
+        success: true,
+        accepted: true,
+        taskId,
+        state: "resuming",
+        code: "ACCEPTED",
+        message: "该任务正在执行，已恢复等待"
+      };
+    }
+    return {
+      success: false,
+      accepted: false,
+      taskId,
+      state: "busy",
+      code: "PLUGIN_BUSY",
+      message: "已有其他投递任务在执行，请稍后再试"
+    };
+  }
+
+  // 持久化执行状态决定恢复语义：同 taskId 复用同一 executionId/key；
+  // 不同 taskId 只有在没有活动执行时才允许开始。活动判定遵循实际租约：
+  // starting/reporting 绝不按本地时间自动清理，executing 以持久化
+  // leaseExpiresAt（+容差）为准，时间字段畸形/缺失时保守 busy。
+  const persisted = await Cloud.readExecutionState();
+  if (persisted && persisted.taskId !== taskId) {
+    if (Cloud.isExecutionActive(persisted)) {
+      return {
+        success: false,
+        accepted: false,
+        taskId,
+        state: "busy",
+        code: "PLUGIN_BUSY",
+        message: "已有其他投递任务在执行，请稍后再试"
+      };
+    }
+    // executing 租约已明确过期：保守清理后再执行当前任务，绝不并行开始第二个任务。
+    await Cloud.clearExecutionState();
+  }
+
+  const pageTabId = sender.tab?.id || null;
+  activeCloudRun = { taskId, startedAt: Date.now() };
+  runCloudDelivery(taskId, pageTabId, bound)
+    .catch(() => {})
+    .finally(() => {
+      if (activeCloudRun?.taskId === taskId) activeCloudRun = null;
+    });
+  return {
+    success: true,
+    accepted: true,
+    taskId,
+    state: persisted && persisted.taskId === taskId ? "resuming" : "accepted",
+    code: "ACCEPTED",
+    message: "已接收投递唤醒请求"
+  };
+}
+
+async function runCloudDelivery(taskId, pageTabId, bound) {
+  const Cloud = cloudClient();
+  await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "accepted", "ACCEPTED", "已接收投递唤醒请求"));
+  await executeCloudDelivery(taskId, pageTabId, bound);
+}
+
+async function executeCloudDelivery(taskId, pageTabId, bound) {
+  const Cloud = cloudClient();
+
+  // 已持久化报告：下一次显式唤醒原样重放 finish 请求，不重新导航/点击。
+  let execution = await Cloud.readExecutionState();
+  if (execution && execution.taskId === taskId && execution.phase === "reporting" && execution.report) {
+    await replayCloudReport(taskId, pageTabId, bound, execution);
+    return;
+  }
+  // 同 task 的 executing 租约已明确过期：不得再次导航/点击，清状态并报告
+  // LEASE_EXPIRED，等用户下一次显式唤醒重新 pending/start。
+  if (execution && execution.taskId === taskId && execution.phase === "executing" && Cloud.isLeaseExpired(execution)) {
+    await Cloud.clearExecutionState();
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "LEASE_EXPIRED", "执行租约已过期，请重新确认任务后再次唤醒"));
+    return;
+  }
+
+  if (!execution || execution.taskId !== taskId) {
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "fetching", "FETCHING", "正在云端领取任务"));
+    const pending = await Cloud.fetchPending(bound.apiBase, bound.token);
+    if (!pending.success) {
+      await handleCloudApiFailure(taskId, pageTabId, bound, pending);
+      return;
+    }
+    const item = Array.isArray(pending.data?.items)
+      ? pending.data.items.find((entry) => String(entry?.id || "").toLowerCase() === taskId)
+      : null;
+    if (!item) {
+      await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "TASK_NOT_AVAILABLE", "任务不存在或尚未确认，无法执行"));
+      await Cloud.appendRecentResult({ taskId, status: "FAILED", code: "TASK_NOT_AVAILABLE", finishedAt: new Date().toISOString() });
+      return;
+    }
+    let freshExecution;
+    try {
+      freshExecution = {
+        taskId,
+        executionId: Cloud.randomExecutionId(),
+        startIdempotencyKey: Cloud.randomIdempotencyKey("start"),
+        pendingVersion: Number.isInteger(Number(item.version)) ? Number(item.version) : 0,
+        phase: "starting",
+        updatedAt: new Date().toISOString(),
+        leaseId: null,
+        leaseExpiresAt: "",
+        version: null,
+        attemptNumber: null,
+        task: null,
+        report: null
+      };
+    } catch {
+      // 安全随机不可用：不生成弱 execution/key，绝不调用 start/导航/content。
+      await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "SECURE_RANDOM_UNAVAILABLE", "安全随机数不可用，无法启动投递执行"));
+      return;
+    }
+    execution = freshExecution;
+    // start 网络请求之前持久化稳定 execution/key：即使响应丢失或 Service Worker
+    // 重启，重复唤醒也用原 key/payload 幂等重放同一 start。写失败则绝不调用
+    // start：未持久化的幂等键无法在重启后恢复，会产生不可恢复的副作用。
+    const savedStarting = await Cloud.writeExecutionState(execution);
+    if (!savedStarting) {
+      await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "STORAGE_UNAVAILABLE", "本地存储不可用，无法安全启动投递"));
+      return;
+    }
+  }
+
+  if (execution.phase === "starting") {
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "starting", "STARTING", "正在领取执行租约"));
+    const startResult = await Cloud.startTask(
+      bound.apiBase,
+      bound.token,
+      taskId,
+      {
+        version: execution.pendingVersion,
+        executionId: execution.executionId,
+        extensionVersion: Cloud.currentExtensionVersion()
+      },
+      execution.startIdempotencyKey
+    );
+    if (!startResult.success) {
+      await handleCloudApiFailure(taskId, pageTabId, bound, startResult, execution);
+      return;
+    }
+    const started = startResult.data || {};
+    execution = {
+      ...execution,
+      phase: "executing",
+      updatedAt: new Date().toISOString(),
+      leaseId: started.leaseId == null ? null : String(started.leaseId),
+      leaseExpiresAt: typeof started.leaseExpiresAt === "string" ? started.leaseExpiresAt : "",
+      version: Number.isInteger(Number(started.version)) ? Number(started.version) : execution.pendingVersion,
+      attemptNumber: Number.isInteger(Number(started.attemptNumber)) ? Number(started.attemptNumber) : null,
+      // 实际导航 URL 与 Boss greeting 只采用 start 响应，不信任网页消息。
+      task: {
+        platform: started.task?.platform === "BOSS" ? "BOSS" : started.task?.platform === "ZHILIAN" ? "ZHILIAN" : "",
+        jobUrl: String(started.task?.jobUrl || ""),
+        greeting: String(started.task?.greeting || "")
+      }
+    };
+    // start 已成功：租约/载荷必须持久化成功才能导航/点击。写失败时保留此前
+    // starting 状态，下次同 task 显式唤醒用相同 start key 幂等重放。
+    const savedExecuting = await Cloud.writeExecutionState(execution);
+    if (!savedExecuting) {
+      await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "STORAGE_UNAVAILABLE", "本地存储不可用，已停止投递执行"));
+      return;
+    }
+  }
+
+  if (execution.phase !== "executing" || !execution.task || !execution.task.platform) {
+    await finishCloudRun(taskId, pageTabId, bound, execution, "UNKNOWN_ERROR");
+    return;
+  }
+
+  await executeCloudContentDelivery(taskId, pageTabId, bound, execution);
+}
+
+async function handleCloudApiFailure(taskId, pageTabId, bound, result, execution) {
+  const Cloud = cloudClient();
+  if (result.code && Cloud.shouldClearTokenOnCode(result.code)) {
+    // 401/403 稳定错误码：清理本机 Token 并停止，不自动重试。
+    await Cloud.clearBoundState();
+    await Cloud.clearExecutionState();
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", result.code, "云端凭证已失效，请重新绑定"));
+    return;
+  }
+  if (Cloud.isRetryableCloudFailure(result)) {
+    // 429/5xx/网络错误：保留已持久化的 execution（含 startIdempotencyKey），
+    // 报告 offline，等用户再次显式唤醒后重放同一 start。
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "offline", result.code || "NETWORK_ERROR", "云端服务暂不可用，请稍后再次唤醒"));
+    return;
+  }
+  // 409 幂等冲突/版本变化/租约问题：不能无界自动重试，清理后只报告稳定状态。
+  await Cloud.clearExecutionState();
+  await postCloudDeliveryEvent(
+    pageTabId,
+    Cloud.cloudEvent(taskId, "failed", result.code || "INVALID_STATE_TRANSITION", result.message || "任务状态不允许执行")
+  );
+}
+
+async function executeCloudContentDelivery(taskId, pageTabId, bound, execution) {
+  const Cloud = cloudClient();
+  const platform = execution.task.platform;
+  const config = PLATFORM_CONFIG[platform === "ZHILIAN" ? "zhilian" : "boss"];
+
+  // 导航前再次严格校验 HTTPS + 正确 host label + 岗位详情 path，
+  // 拒绝 lookalike、首页、搜索页、端口、userinfo、query/fragment 与编码绕过。
+  const jobUrl = Cloud.isTrustedJobUrl(execution.task.jobUrl, platform);
+  if (!jobUrl) {
+    await finishCloudRun(taskId, pageTabId, bound, execution, "PAGE_CHANGED");
+    return;
+  }
+
+  let tab;
+  try {
+    tab = await findOrCreatePlatformTab(platform === "ZHILIAN" ? "zhilian" : "boss", jobUrl, { active: true });
+    if (!tab?.id) throw new Error("缺少平台标签页");
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "navigating", "NAVIGATING", "正在打开岗位详情页"));
+    await navigatePlatformTab(tab.id, jobUrl, config, DELIVERY_NAVIGATION_TIMEOUT_MS, platform === "BOSS" ? { bossJobUrl: jobUrl } : { zhilianJobUrl: jobUrl });
+    await ensureContentScript(tab.id, config.contentScript);
+  } catch {
+    await finishCloudRun(taskId, pageTabId, bound, execution, "NETWORK_ERROR");
+    return;
+  }
+
+  // Token、lease、executionId 一律不传入招聘平台 content script；
+  // content 只收到受控的 url/id/greeting 并回传固定枚举结果。
+  await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "executing", "EXECUTING", "正在页面执行投递"));
+  const contentTask = {
+    url: jobUrl,
+    id: taskId
+  };
+  if (platform === "BOSS") {
+    contentTask.greeting = String(execution.task.greeting || "");
+  }
+  const messageType = platform === "BOSS" ? "BOSS_DELIVER_CURRENT_V2" : "ZHILIAN_DELIVER_CURRENT_V2";
+  let contentResult = null;
+  try {
+    contentResult = await chrome.tabs.sendMessage(tab.id, {
+      type: messageType,
+      source: "GET_JOBS_BACKGROUND",
+      cloudManaged: true,
+      task: contentTask,
+      pageTabId,
+      deliveryIndex: 1,
+      deliveryTotal: 1
+    });
+  } catch {
+    contentResult = null;
+  }
+
+  const normalized = Cloud.normalizeContentResult(contentResult, platform);
+  if (!normalized.valid) {
+    await finishCloudRun(taskId, pageTabId, bound, execution, "UNKNOWN_ERROR");
+    return;
+  }
+  if (normalized.kind === "success") {
+    const resultCode = contentResult?.resultCode === "ALREADY_DELIVERED" ? "ALREADY_DELIVERED" : "DELIVERED";
+    await finishCloudRun(taskId, pageTabId, bound, execution, resultCode);
+    return;
+  }
+  await finishCloudRun(taskId, pageTabId, bound, execution, normalized.code);
+}
+
+/**
+ * 内容结果规范为后端契约并回传。finish 请求前先持久化已规范化报告：
+ * 网络失败时保留，下一次显式唤醒原样重放；success/fail/pause 成功后清理
+ * 活动执行状态，只保留不敏感的最近结果。reporting 写失败时绝不发送
+ * finish：保留 executing 状态，等下一次同 task 显式唤醒重新检查页面并
+ * 形成结果（Boss 已沟通/智联已投递由 content 判定，避免重复平台动作）。
+ */
+async function finishCloudRun(taskId, pageTabId, bound, execution, code) {
+  const Cloud = cloudClient();
+  const report = Cloud.buildReportPayload(execution, code, new Date().toISOString());
+  let reportIdempotencyKey;
+  try {
+    reportIdempotencyKey = Cloud.randomIdempotencyKey("report");
+  } catch {
+    // 安全随机不可用：不发送未经持久化的 finish，保留 executing 状态。
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "SECURE_RANDOM_UNAVAILABLE", "安全随机数不可用，无法回传执行结果"));
+    return;
+  }
+  const persisted = {
+    ...execution,
+    phase: "reporting",
+    updatedAt: new Date().toISOString(),
+    report: {
+      kind: report.kind,
+      payload: report.payload,
+      reportIdempotencyKey
+    }
+  };
+  const savedReport = await Cloud.writeExecutionState(persisted);
+  if (!savedReport) {
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", "STORAGE_UNAVAILABLE", "本地存储不可用，执行结果未能安全保存"));
+    return;
+  }
+  await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "reporting", "REPORTING", "正在回传执行结果"));
+  await sendCloudReport(taskId, pageTabId, bound, persisted);
+}
+
+async function replayCloudReport(taskId, pageTabId, bound, execution) {
+  const Cloud = cloudClient();
+  await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "reporting", "REPORTING", "正在重放上次执行结果"));
+  await sendCloudReport(taskId, pageTabId, bound, execution);
+}
+
+async function sendCloudReport(taskId, pageTabId, bound, execution) {
+  const Cloud = cloudClient();
+  const report = execution.report;
+  const apiCall = report.kind === "success"
+    ? Cloud.reportSuccess
+    : report.kind === "pause"
+      ? Cloud.reportPause
+      : Cloud.reportFail;
+  const result = await apiCall(bound.apiBase, bound.token, taskId, report.payload, report.reportIdempotencyKey);
+
+  if (result.success) {
+    await Cloud.clearExecutionState();
+    const code = report.kind === "pause"
+      ? String(report.payload?.reason || "")
+      : report.kind === "success"
+        ? String(report.payload?.resultCode || "")
+        : String(report.payload?.errorCode || "");
+    const status = report.kind === "pause" ? "PAUSED" : report.kind === "success" ? "SUCCEEDED" : "FAILED";
+    const stage = report.kind === "pause" ? "paused" : report.kind === "success" ? "succeeded" : "failed";
+    await Cloud.appendRecentResult({ taskId, status, code, finishedAt: new Date().toISOString() });
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, stage, code, cloudReportMessage(report)));
+    return;
+  }
+  if (result.code && Cloud.shouldClearTokenOnCode(result.code)) {
+    await Cloud.clearBoundState();
+    await Cloud.clearExecutionState();
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "failed", result.code, "云端凭证已失效，请重新绑定"));
+    return;
+  }
+  if (Cloud.isRetryableCloudFailure(result)) {
+    // 保留已持久化 report，等用户再次显式唤醒后原样重放。
+    await postCloudDeliveryEvent(pageTabId, Cloud.cloudEvent(taskId, "offline", result.code || "NETWORK_ERROR", "结果回传失败，请稍后再次唤醒"));
+    return;
+  }
+  // 409 租约/版本问题：不能无界重试，清理后只报告稳定状态。
+  await Cloud.clearExecutionState();
+  await postCloudDeliveryEvent(
+    pageTabId,
+    Cloud.cloudEvent(taskId, "failed", result.code || "REPORT_REJECTED", "执行结果未能被云端接受")
+  );
+}
+
+function cloudReportMessage(report) {
+  const message = report?.payload?.message;
+  if (typeof message === "string" && message) return message;
+  if (report?.kind === "pause") return "投递已暂停，请在网页查看原因";
+  if (report?.kind === "success") return "投递执行成功";
+  return "投递执行失败";
+}
+
+/** 页面进度事件：payload 只含 taskId + 稳定 stage/code/message/time。 */
+async function postCloudDeliveryEvent(pageTabId, payload) {
+  if (pageTabId) {
+    try {
+      const tab = await chrome.tabs.get(pageTabId);
+      if (isAllowedPageUrl(tab.url || tab.pendingUrl || "")) {
+        await chrome.tabs.sendMessage(pageTabId, {
+          source: "GET_JOBS_BACKGROUND",
+          type: "GET_JOBS_EXTENSION_EVENT",
+          payload
+        }).catch(() => {});
+        return;
+      }
+    } catch {
+      // 页面标签页已关闭时退回广播。
+    }
+  }
+  await broadcastPlatformEvent({ ...payload, platform: "cloud" }, pageTabId);
 }

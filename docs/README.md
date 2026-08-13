@@ -14,6 +14,8 @@
 | [开发路线图](../CLOUD_ROADMAP.md) | 阶段 0-9、验收标准和发布门槛 |
 | [仓库初始化指南](../CLOUD_REPO_INIT.md) | 独立仓库来源、安全复制和初始化检查 |
 | [代码迁移清单](../CLOUD_MIGRATION_INVENTORY.md) | 直接复用、重构参考和退出 Cloud 的模块 |
+| [云端基础设施](../CLOUD_INFRASTRUCTURE.md) | 第 2 轮运行拓扑、Profile、迁移、存储、健康和备份边界 |
+| [Docker 启动指南](../README_DOCKER.md) | 一键启动、探针、常用运维与故障排查 |
 | [参与贡献](../CONTRIBUTING.md) | 分支、提交、测试、安全和 PR 要求 |
 
 ## 自动化检查

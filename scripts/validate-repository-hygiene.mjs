@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const forbiddenDirectories = new Set([
+  ".secrets",
+  "backups",
   "chrome-profile",
   "cv_uploads",
   "data",
@@ -40,8 +42,15 @@ const forbiddenExtensions = [
 ];
 
 const forbiddenFileNames = new Set(["config.yaml", "cookie.json", "data.json"]);
+const nonSecretExampleKeys = new Set(["AUTH_COOKIE_SECURE"]);
 const migrationRoot = "src/main/resources/db";
 const migrationPrefix = "src/main/resources/db/migration/";
+const migrationDirectories = new Set([
+  migrationRoot,
+  `${migrationRoot}/migration`,
+  `${migrationRoot}/migration/postgresql`,
+  `${migrationRoot}/migration/sqlite`,
+]);
 
 function git(...args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
@@ -66,7 +75,7 @@ function violationFor(value) {
   const segments = lower.split("/");
   const forbiddenDirectory = segments.slice(0, -1).find((segment) => forbiddenDirectories.has(segment));
   if (forbiddenDirectory) {
-    if (lower === migrationRoot || lower === `${migrationRoot}/migration`) return null;
+    if (migrationDirectories.has(lower)) return null;
     if (lower.startsWith(migrationPrefix) && lower.endsWith(".sql")) return null;
     return `本地运行目录 ${forbiddenDirectory}/`;
   }
@@ -112,7 +121,13 @@ function validateExampleSecrets() {
     const separator = line.indexOf("=");
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (/(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE)$/i.test(key) && value !== "") populated.push(key);
+    if (
+      !nonSecretExampleKeys.has(key) &&
+      /(?:API_KEY|PASSWORD|SECRET|TOKEN|COOKIE|ACCESS_KEY)/i.test(key) &&
+      value !== ""
+    ) {
+      populated.push(key);
+    }
   }
 
   if (populated.length > 0) {

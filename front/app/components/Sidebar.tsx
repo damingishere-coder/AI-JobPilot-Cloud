@@ -6,21 +6,20 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import type { IconType } from 'react-icons'
 import {
-  BiBarChart,
-  BiBrain,
   BiBriefcase,
   BiChevronDown,
   BiCog,
+  BiFile,
   BiHomeAlt,
+  BiLogOut,
   BiMoon,
-  BiSearch,
   BiSun,
   BiTask,
-  BiUserCircle,
 } from 'react-icons/bi'
 import { motion } from 'framer-motion'
 import { useTheme } from 'next-themes'
 import { API_BASE } from '@/lib/api'
+import { useAuth } from '@/app/components/AuthProvider'
 
 type NavItem = {
   href: string
@@ -44,32 +43,16 @@ const navGroups: NavGroup[] = [
   },
   {
     title: '求职资料',
-    items: [{ href: '/ai-config', icon: BiBrain, label: 'AI配置', color: 'text-violet-500' }],
-  },
-  {
-    title: '投递平台',
     items: [
-      { href: '/boss', icon: BiBriefcase, label: 'Boss直聘', color: 'text-blue-500' },
-      { href: '/zhilian', icon: BiUserCircle, label: '智联招聘', color: 'text-cyan-500' },
+      { href: '/resume', icon: BiFile, label: '我的简历', color: 'text-violet-500' },
+      { href: '/preferences', icon: BiCog, label: '求职目标', color: 'text-cyan-500' },
     ],
   },
   {
-    title: '投递记录',
+    title: '岗位管理',
     items: [
-      { href: '/boss/analysis', icon: BiBarChart, label: 'Boss分析', color: 'text-teal-500' },
-      { href: '/zhilian/analysis', icon: BiBarChart, label: '智联分析', color: 'text-sky-500' },
-    ],
-  },
-  {
-    title: '系统设置',
-    items: [{ href: '/env-config', icon: BiCog, label: '环境配置', color: 'text-slate-500' }],
-  },
-  {
-    title: '实验功能',
-    experimental: true,
-    items: [
-      { href: '/liepin', icon: BiSearch, label: '猎聘', color: 'text-orange-400', disabled: true, badge: '实验' },
-      { href: '/51job', icon: BiTask, label: '51job', color: 'text-amber-400', disabled: true, badge: '实验' },
+      { href: '/jobs', icon: BiBriefcase, label: '岗位池', color: 'text-blue-500' },
+      { href: '/delivery', icon: BiTask, label: '投递清单', color: 'text-cyan-500' },
     ],
   },
 ]
@@ -77,6 +60,7 @@ const navGroups: NavGroup[] = [
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, setTheme } = useTheme()
+  const { enabled: authEnabled, user, logout } = useAuth()
   const [mounted, setMounted] = useState(false)
 
   // 健康检查状态：up / degraded / down / unknown
@@ -198,7 +182,7 @@ export default function Sidebar() {
       </motion.div>
 
       {/* 导航菜单 */}
-      <nav className="h-[calc(100vh-178px)] space-y-3 overflow-y-auto px-4 pb-4">
+      <nav className="h-[calc(100vh-220px)] space-y-3 overflow-y-auto px-4 pb-4">
         {navGroups.map((group, groupIndex) => (
           <div key={group.title} className={group.experimental ? 'pt-1 opacity-80' : ''}>
             <div className="px-2 py-2 text-xs font-medium tracking-normal text-slate-400 dark:text-waterloo">{group.title}</div>
@@ -253,11 +237,31 @@ export default function Sidebar() {
         transition={{ delay: 0.8, duration: 0.5 }}
         className="absolute bottom-0 left-0 right-0 border-t border-slate-200/80 p-4 dark:border-strokedark"
       >
-        {/* 版本信息 */}
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-900 text-sm font-semibold text-white shadow-sm">牛</div>
-          <p className="text-xs text-slate-500 dark:text-waterloo">v1.3.0</p>
-          <BiChevronDown className="ml-auto text-slate-400" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-900 text-sm font-semibold text-white shadow-sm">牛</div>
+          <div className="min-w-0 flex-1">
+            {authEnabled && user ? (
+              <>
+                <p className="truncate text-xs font-semibold text-slate-700 dark:text-slate-200" title={user.emailMasked}>{user.emailMasked}</p>
+                <p className="text-[10px] text-slate-400">{user.role === 'ADMIN' ? '管理员' : '普通用户'} · v1.3.0</p>
+              </>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-waterloo">本地模式 · v1.3.0</p>
+            )}
+          </div>
+          {authEnabled && user ? (
+            <button
+              type="button"
+              onClick={() => void logout().finally(() => { window.location.href = '/login' })}
+              className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+              title="退出登录"
+              aria-label="退出登录"
+            >
+              <BiLogOut className="text-lg" />
+            </button>
+          ) : (
+            <BiChevronDown className="text-slate-400" />
+          )}
         </div>
       </motion.div>
     </motion.aside>

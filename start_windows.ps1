@@ -140,6 +140,7 @@ Set-Location -LiteralPath '$ProjectRoot'
 
 $FrontendCommand = @"
 Set-Location -LiteralPath '$FrontDir'
+`$env:CLOUD_LOGIN_REQUIRED = 'false'
 pnpm dev *> '$FrontendLog'
 "@
 

@@ -1,0 +1,76 @@
+spring:
+  config:
+    activate:
+      on-profile: api
+  session:
+    store-type: redis
+    timeout: 12h
+    redis:
+      namespace: ai-jobpilot:session
+      repository-type: indexed
+      flush-mode: on-save
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
+
+app:
+  role: api
+  clamav:
+    enabled: ${CLAMAV_ENABLED:true}
+    host: ${CLAMAV_HOST:127.0.0.1}
+    port: ${CLAMAV_PORT:3310}
+    connect-timeout: ${CLAMAV_CONNECT_TIMEOUT:3s}
+    read-timeout: ${CLAMAV_READ_TIMEOUT:30s}
+  auth:
+    hash-pepper: ${auth_hash_pepper:${AUTH_HASH_PEPPER:}}
+    terms-version: ${AUTH_TERMS_VERSION:2026-08-draft}
+    cookie-name: AJP_SESSION
+    secure-cookie: ${AUTH_COOKIE_SECURE:false}
+    normal-session-timeout: 12h
+    remembered-session-timeout: 30d
+    pre-auth-session-timeout: 10m
+    login-ip-limit: 10
+    login-email-limit: 5
+    login-ip-window: 1m
+    login-email-window: 15m
+    register-ip-limit: 5
+    register-ip-window: 1h
+    csrf-ip-limit: 30
+    csrf-ip-window: 1m
+  plugin:
+    bind-code-ttl: ${PLUGIN_BIND_CODE_TTL:5m}
+    max-active-bind-codes: ${PLUGIN_MAX_ACTIVE_BIND_CODES:3}
+    token-ttl: ${PLUGIN_TOKEN_TTL:90d}
+    token-prefix: ajp_plg_
+    max-devices-per-user: ${PLUGIN_MAX_DEVICES_PER_USER:10}
+    min-extension-version: ${PLUGIN_MIN_EXTENSION_VERSION:}
+    bind-ip-limit: 20
+    bind-ip-window: 10m
+    bind-code-attempt-limit: 5
+    last-seen-update-interval-seconds: 60
+    # 精确扩展 Origin 白名单（公开信息，非秘密）；开发默认值等于 manifest 公钥
+    # 派生的固定开发扩展 ID。只接受 chrome-extension://[a-p]{32}，不支持通配符。
+    allowed-extension-origins: ${PLUGIN_ALLOWED_EXTENSION_ORIGINS:chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc}
+  delivery:
+    lease-seconds: ${DELIVERY_LEASE_SECONDS:600}
+    max-attempts: ${DELIVERY_MAX_ATTEMPTS:3}
+    pending-default-limit: 10
+    pending-max-limit: 20
+    poll-after-seconds: 10
+    greeting-max-code-points: 60
+    lease-sweep-delay: 60s
+server:
+  max-http-request-header-size: 32KB
+  forward-headers-strategy: framework
+  port: ${SERVER_PORT:8888}
+
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState,db,redis,storage,clamAv

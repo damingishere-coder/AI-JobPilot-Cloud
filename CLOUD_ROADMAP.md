@@ -102,7 +102,7 @@ Git/GitHub、README、`.gitignore`、`.dockerignore`、CI、CodeQL、Issue/PR �
 
 - 将运行配置分为 dev/test/prod，所有真实密钥通过环境或 Secret 注入。
 - 新建 PostgreSQL 连接、Cloud 专用 Flyway 空基线和集成测试容器。
-- 引入 Redis，用于 Session、绑定码、限流和 Redis Streams 队列。
+- 引入 Redis 基础设施，为后续 Session、绑定码、限流和 Redis Streams 队列预留连接；本阶段不提前实现业务消费者。
 - 把 API 与 AI Worker 设计为同代码库的两个独立进程/容器。
 - 配置 Next.js Web、Spring Boot API、Worker、PostgreSQL、Redis 的 Docker Compose。
 - Nginx 统一入口、HTTPS、安全头、上传大小和超时限制。
@@ -118,7 +118,7 @@ Spring Boot 配置和依赖、Flyway、Redis、Worker 启动器、Dockerfile/Com
 - 一条文档化命令能启动全部开发组件，健康检查正确区分存活和就绪。
 - PostgreSQL/Redis 不暴露公网，Nginx 是唯一入口。
 - Flyway 可在空 PostgreSQL 完成迁移，SQLite SQL 未被直接混用。
-- 停止 Redis 后业务事实不丢失，恢复后可重新投递未完成 AI 消息。
+- 停止 Redis 后业务事实不丢失；未完成 AI 消息重新投递随真实队列消费者在阶段 5 验收。
 - HTTPS、Secret 注入、日志脱敏、备份和恢复至少完成一次测试。
 
 ### 不做什么
@@ -162,6 +162,8 @@ Auth/User Controller 与 Service、Spring Security、Redis Session/Rate Limit、
 
 ## 阶段 4：简历和求职目标
 
+> 实施状态：第 4 轮已完成。已交付 PDF/DOCX/TXT 上传、ClamAV 安检、AES-256-GCM 加密、异步文本提取、删除清理、版本化求职目标、审计和 RLS 隔离。
+
 ### 目标
 
 让用户安全维护一份当前简历和版本化求职目标，作为 AI 匹配的可信输入。
@@ -194,6 +196,8 @@ Resume/Preference API、文件存储和解析 Worker、PostgreSQL、Web 表单�
 - 不支持无限文件格式和超大视频/图片简历。
 
 ## 阶段 5：岗位池和 AI 匹配
+
+> 第 5 轮完成情况：`job_matches`、AI 队列/重试、严格结果解析、服务端推荐等级、列表筛选和统一 Web 展示已完成；模型调用用量已记录。真实插件岗位上传与额度扣减仍分别属于阶段 7 和阶段 9。
 
 ### 目标
 
@@ -229,6 +233,8 @@ Job/Match API、PostgreSQL、Redis、AI Worker、现有 `JobAiAnalysisService`/`
 
 ## 阶段 6：投递清单和用户确认
 
+> 第 5 轮完成情况：投递表与不可变事件、逐条确认/跳过、BOSS 招呼语编辑、乐观锁与幂等、统一 `/delivery` 页面均已完成；本轮明确不启用批量确认。
+
 ### 目标
 
 建立“建议不等于授权”的投递清单和严格状态机，保证只有用户明确确认的任务才可进入执行通道。
@@ -261,6 +267,8 @@ Delivery API/Service/状态机、PostgreSQL、审计、前端待确认卡片/表
 - 不做复杂投递策略编排和跨用户共享清单。
 
 ## 阶段 7：插件云端绑定和岗位上传
+
+> 第 5 轮提前完成部分：一次性绑定码、设备/Token 后端、Web 设备管理、开发扩展固定 ID 与 Cloud API Base 已完成。结构化岗位上传、生产扩展 ID/域名和商店发布仍未完成。
 
 ### 目标
 
@@ -295,6 +303,8 @@ Plugin API、Redis 绑定码、设备/Token 表、Chrome Extension Manifest/back
 - 不在本阶段执行真实投递。
 
 ## 阶段 8：插件执行投递和结果回传
+
+> 第 5 轮提前完成部分：BOSS/智联已接入“网页逐条确认后显式唤醒”的 Cloud 执行闭环，包含领取、租约、成功/失败/暂停回传与离线恢复；自动化契约/Fixture 已通过。真实招聘平台受控人工 E2E、生产开关和紧急停用能力仍是发布前门槛。
 
 ### 目标
 
