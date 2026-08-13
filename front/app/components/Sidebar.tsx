@@ -14,6 +14,7 @@ import {
   BiLogOut,
   BiMoon,
   BiSun,
+  BiTask,
 } from 'react-icons/bi'
 import { motion } from 'framer-motion'
 import { useTheme } from 'next-themes'
@@ -49,7 +50,10 @@ const navGroups: NavGroup[] = [
   },
   {
     title: '岗位管理',
-    items: [{ href: '/jobs', icon: BiBriefcase, label: '岗位池', color: 'text-blue-500' }],
+    items: [
+      { href: '/jobs', icon: BiBriefcase, label: '岗位池', color: 'text-blue-500' },
+      { href: '/delivery', icon: BiTask, label: '投递清单', color: 'text-cyan-500' },
+    ],
   },
 ]
 
