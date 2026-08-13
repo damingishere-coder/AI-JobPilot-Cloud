@@ -438,7 +438,13 @@ test("an untrusted job URL from the start response is rejected before any naviga
   const body = JSON.parse(fetchByPattern(h.fetchCalls, /\/pause$/)[0].options.body);
   assert.equal(body.reason, "PAGE_CHANGED");
   assert.equal(h.sentMessages.filter((entry) => entry.message.cloudManaged).length, 0, "不得向平台页面发送投递任务");
-  assert.ok(!h.tabList.some((tab) => (tab.url || "").includes("evil.example.com")), "不得导航到恶意 URL");
+  assert.ok(!h.tabList.some((tab) => {
+    try {
+      return new URL(tab.url || "").hostname === "evil.example.com";
+    } catch {
+      return false;
+    }
+  }), "不得导航到恶意 URL");
 });
 
 test("Zhilian cloud task never receives a greeting and navigation re-checks the detail path", async () => {
