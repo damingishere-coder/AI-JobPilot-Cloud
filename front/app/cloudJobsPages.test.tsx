@@ -175,9 +175,10 @@ describe("第五轮统一岗位池", () => {
     render(<JobsPage />)
     fireEvent.click(await screen.findByRole("button", { name: /AI 分析/ }))
 
-    expect(await screen.findByText("排队中")).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: /AI 分析|重新分析/ })).not.toBeInTheDocument()
-    expect(screen.getByText(/分析排队中，请稍后手动刷新/)).toBeInTheDocument()
+    expect(await screen.findByText(/分析排队中，请稍后手动刷新/)).toBeInTheDocument()
+    const jobRow = screen.getByRole("row", { name: /Java 后端开发/ })
+    expect(within(jobRow).getByText("排队中")).toBeInTheDocument()
+    expect(within(jobRow).queryByRole("button", { name: /AI 分析|重新分析/ })).not.toBeInTheDocument()
   })
 })
 
