@@ -594,7 +594,7 @@ test("p7 capture payload builder whitelists fields and rejects sensitive content
   assert.ok(!serialized.toLowerCase().includes("securityid"), "不得携带 securityId");
   assert.ok(!serialized.includes("SENTINEL"), "未知/敏感字段不得进入负载");
   assert.ok(!serialized.includes("<b>") && !serialized.includes("<script>"), "不得携带 HTML");
-  assert.ok(!serialized.includes("evil.example.com"), "描述中的外链必须剥离");
+  assert.equal(Object.hasOwn(built.payload, "description"), false, "描述字段不得进入上传白名单");
   assert.equal(built.payload.platformJobId, "job-p7-42");
   assert.equal(built.payload.title, "云原生工程师");
   assert.equal(JSON.stringify(built.payload.benefits), JSON.stringify(["五险一金", "双休"]));
