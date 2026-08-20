@@ -69,7 +69,7 @@
 | 插件 Token | `Authorization: Bearer <opaque-token>` | `/api/plugin/**` 的绑定后接口 |
 | 一次性绑定码 | 短期、高熵、单次使用 | `POST /api/plugin/bind`，不是长期 Token |
 
-插件 Token 使用 Scope：`device:read`、`jobs:capture`、`tasks:read`、`tasks:write`。插件不能调用简历、求职目标、额度、管理或 Web 登录接口。
+插件 Token 使用 Scope：`device:read`、`tasks:read`、`tasks:write`、`jobs:write`（岗位采集上传）。插件不能调用简历、求职目标、额度、管理或 Web 登录接口。
 
 ### 1.4 通用错误码
 
@@ -125,12 +125,12 @@
 - **user_id 隔离**：仅注销当前 Session，不撤销用户其他设备或插件 Token。
 - **插件 Token**：不允许。
 
-### `GET /api/me`
+### `POST /api/me`
 
 - **请求参数**：无。
 - **响应结构**：`200`，`data: { id, emailMasked, status, profile, quotaSummary, sessionExpiresAt, csrfToken }`。
-- **权限要求**：Web Session。
-- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`RATE_LIMITED`。
+- **权限要求**：Web Session + CSRF；前端先调用 `GET /api/auth/csrf`，再以 `X-CSRF-TOKEN` 请求本接口。
+- **主要错误码**：`AUTH_REQUIRED`、`ACCOUNT_DISABLED`、`CSRF_INVALID`、`RATE_LIMITED`。
 - **user_id 隔离**：只按 Session 中的 `user_id` 查询，绝不按 Query 参数切换用户。
 - **插件 Token**：不允许；插件身份使用 `/api/plugin/me`。
 
@@ -138,11 +138,19 @@
 
 ### `POST /api/resumes/upload`
 
-- **请求参数**：`multipart/form-data`：`file`（第一版允许 PDF/DOCX 等明确白名单）、可选 `setCurrent=true`。服务端校验魔数、MIME、扩展名、大小和页数。
-- **响应结构**：`202`，`data: { id, originalFilename, contentType, fileSize, parseStatus: "UPLOADED", isCurrent, createdAt }`。解析可异步进行。
+- **请求参数**：`multipart/form-data`：`file`（PDF、DOCX、TXT）、可选 `setCurrent=true`，必须携带 `Idempotency-Key`。服务端先执行 ClamAV 扫描，再校验魔数、MIME、扩展名、10 MiB 大小、PDF 页数和 DOCX 解压边界。
+- **响应结构**：`202`，`data: { resume: { id, originalFilename, contentType, fileSize, parseStatus: "UPLOADED", current, version, createdAt }, deduplicated }`。解析由 Worker 异步进行。
 - **权限要求**：Web Session + CSRF。
 - **主要错误码**：`UNSUPPORTED_MEDIA_TYPE`、`PAYLOAD_TOO_LARGE`、`FILE_SIGNATURE_INVALID`(422)、`MALWARE_SUSPECTED`(422)、`QUOTA_EXCEEDED`、`STORAGE_UNAVAILABLE`(503)。
 - **user_id 隔离**：存储键由服务端生成，数据库写当前 `user_id`；设置当前简历在同一事务完成。
+- **插件 Token**：不允许。
+
+### `GET /api/resumes`
+
+- **请求参数**：Query `page`、`size`，页大小最大 100。
+- **响应结构**：`200`，返回当前用户未删除简历的分页元数据，不返回提取文本。
+- **权限要求**：Web Session。
+- **user_id 隔离**：列表与计数均使用当前 Session 用户并受 RLS 二次约束。
 - **插件 Token**：不允许。
 
 ### `GET /api/resumes/current`
@@ -156,7 +164,7 @@
 
 ### `DELETE /api/resumes/:id`
 
-- **请求参数**：Path `id`；JSON 可选 `{ "version": 3 }` 或使用 `If-Match`；需 `Idempotency-Key`。
+- **请求参数**：Path `id`；必须使用 `If-Match` 传当前版本，并携带 `Idempotency-Key`。
 - **响应结构**：`202`，`data: { id, deletionStatus: "SCHEDULED", deletedAt }`。后台删除原文件和派生文本。
 - **权限要求**：Web Session + CSRF。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`RESOURCE_VERSION_CONFLICT`、`RESUME_IN_USE`(409)、`IDEMPOTENCY_CONFLICT`。
@@ -187,20 +195,20 @@
 
 ### `POST /api/plugin/bind-code`
 
-- **请求参数**：JSON `{ "deviceNameHint": "我的 Edge" }`，需 `Idempotency-Key`。
-- **响应结构**：`201`，`data: { bindCode: "ABCD-EFGH", expiresAt, expiresInSeconds: 300 }`。同一用户活动绑定码数量受限。
+- **请求参数**：无请求体，需 `Idempotency-Key`（同 key 重试返回同一个码）。
+- **响应结构**：`201`，`data: { bindCode: "ABCD-EFGH", expiresAt, expiresInSeconds: 300 }`。同一用户活动绑定码数量受限（超出时最旧的自动废弃）。
 - **权限要求**：Web Session + CSRF。
-- **主要错误码**：`AUTH_REQUIRED`、`RATE_LIMITED`、`TOO_MANY_ACTIVE_BIND_CODES`(429)、`IDEMPOTENCY_CONFLICT`。
-- **user_id 隔离**：绑定码在 Redis 关联当前 Session 的 `user_id`，不允许调用方指定。
+- **主要错误码**：`AUTH_REQUIRED`、`RATE_LIMITED`、`ACCOUNT_DISABLED`(403)。
+- **user_id 隔离**：绑定码在 PostgreSQL 中关联当前 Session 的 `user_id`（只存 SHA-256 哈希，唯一事实源），不允许调用方指定；Redis 仅保存幂等回放缓存与限流计数。
 - **插件 Token**：不允许；这是 Web 生成绑定码的接口。
 
 ### `POST /api/plugin/bind`
 
 - **请求参数**：匿名 JSON `{ "bindCode", "installationId", "deviceName", "browserName", "browserVersion", "extensionVersion", "capabilities": ["BOSS","ZHILIAN"] }`。`installationId` 是插件随机生成的安装 ID，不是硬件指纹。
-- **响应结构**：`201`，`data: { device: { id, deviceName, status, capabilities, boundAt }, token: { value, expiresAt, scopes } }`。Token 明文仅返回一次。
+- **响应结构**：`201`，`data: { device: { id, deviceName, status, capabilities, boundAt }, token: { value, expiresAt, scopes } }`。Token 明文仅返回一次，响应 `Cache-Control: no-store`。
 - **权限要求**：有效、未过期、未使用的一次性绑定码；按 IP 和绑定码限流。
-- **主要错误码**：`BIND_CODE_INVALID`(401)、`BIND_CODE_EXPIRED`(401)、`BIND_CODE_USED`(409)、`EXTENSION_VERSION_UNSUPPORTED`(426)、`DEVICE_LIMIT_EXCEEDED`(422)、`RATE_LIMITED`。
-- **user_id 隔离**：从 Redis 绑定码得到 `user_id`，在同一事务创建设备和 Token 哈希；请求不能传 `user_id`。
+- **主要错误码**：`BIND_CODE_INVALID`(401，覆盖过期/已用/废弃/不存在)、`EXTENSION_VERSION_UNSUPPORTED`(426)、`DEVICE_LIMIT_EXCEEDED`(422)、`ACCOUNT_DISABLED`(403)、`RATE_LIMITED`。
+- **user_id 隔离**：从 PostgreSQL 一次性消费绑定码得到 `user_id`，消费与设备/Token 签发在同一事务，失败整体回滚；请求不能传 `user_id`。
 - **插件 Token**：绑定前不需要，已有插件 Token 也不能替代绑定码。
 
 ### `GET /api/plugin/me`
@@ -210,31 +218,41 @@
 - **权限要求**：插件 Token，Scope `device:read`。
 - **主要错误码**：`PLUGIN_TOKEN_INVALID`、`PLUGIN_TOKEN_EXPIRED`、`DEVICE_REVOKED`、`FORBIDDEN`、`EXTENSION_UPGRADE_REQUIRED`(426)。
 - **user_id 隔离**：只返回 Token 哈希记录绑定的用户和设备。
-- **插件 Token**：允许，且仅允许插件 Token；Web 设备列表未来使用单独接口。
+- **插件 Token**：允许，且仅允许插件 Token；Web 设备列表使用 `GET /api/plugin/devices`（Web Session）。
+
+### `POST /api/plugin/heartbeat`
+
+- **请求参数**：无。
+- **响应结构**：`200`，`data: { deviceId, userId, status, lastSeenAt }`；强制刷新设备 `last_seen_at`。
+- **权限要求**：插件 Token，Scope `device:read`；已撤销/过期凭证在鉴权层被统一拒绝。
+- **插件 Token**：允许，且仅允许插件 Token。
 
 ## 6. 岗位池
 
 ### `POST /api/plugin/jobs/capture`
 
-- **请求参数**：JSON `{ "captureId", "capturedAt", "platform", "job": { "externalJobId", "title", "companyName", "salaryText", "location", "experience", "degree", "description", "jobUrl", "companyInfo", "skills", "welfare" } }`；需 `Idempotency-Key`。
-- **响应结构**：`200/201`，`data: { job: { id, platform, title, companyName, createdAt, lastSeenAt }, deduplicated, analysis: { queued, matchId } }`。
-- **权限要求**：插件 Token，Scope `jobs:capture`，平台必须在设备 capability 和服务器支持列表中。
-- **主要错误码**：`VALIDATION_ERROR`、`UNSUPPORTED_PLATFORM`(422)、`UNTRUSTED_JOB_URL`(422)、`PAYLOAD_TOO_LARGE`、`QUOTA_EXCEEDED`、`IDEMPOTENCY_CONFLICT`、`DEVICE_REVOKED`。
-- **user_id 隔离**：由 Token 注入 `user_id` 和 `source_device_id`；以 `user_id + platform + externalJobId/fingerprint` 去重。
+- **请求参数**：JSON 固定字段 `{ "platform", "platformJobId", "jobUrl", "title", "salary", "city", "district", "companyName", "companySize", "industry", "experience", "education", "benefits", "jobDescription", "hrName", "capturedAt" }`（必填：platform/platformJobId/jobUrl/title/companyName/capturedAt）。多词字段同时接受 snake_case 别名（`platform_job_id`、`job_url`、`company_name`、`company_size`、`job_description`、`hr_name`、`captured_at`）；`user_id`/`device_id` 无别名，未知字段（含 `userId`、`deviceId`、`queuedAt`）一律 400。
+- **平台枚举**：`platform` 归一化为 `BOSS` / `ZHILIAN`（忽略大小写与首尾空白），其它值一律 400。
+- **响应结构**：`200`，`data: { id, status: "created" | "duplicate" }`；`id` 为 `app.job_posts.id`，与 Web `/api/jobs` 同一行。
+- **写入目标**：采集岗位直接写入 `app.job_posts` 岗位池（与 Web 列表、AI 匹配、投递流程共用）。`external_job_id = platformJobId`；`fingerprint` 为服务端 SHA-256（规范化 `platform:platformJobId`），绝不采用客户端提交值；`location` 由 city/district 稳定拼接；`company_info` 只保留白名单键 companySize/industry/district/hrName；`welfare` 存 benefits；`skills` 为空数组；**不存储 raw_payload**。
+- **权限要求**：插件 Token，Scope `jobs:write`；按认证后的 deviceId 维度限流。
+- **主要错误码**：`VALIDATION_ERROR`、`RATE_LIMITED`、`DEVICE_REVOKED`、`DEPENDENCY_UNAVAILABLE`。
+- **user_id 隔离**：`user_id` 只取 Token 解析出的 Principal；以 `user_id + platform + external_job_id`（V4 唯一索引）幂等去重，重复上传返回同一 id + `duplicate`，且只刷新 last_seen_at/updated_at，绝不覆盖 status、匹配结果、投递状态或任何人工编辑数据。
+- **数据清洗**：任何字段包含 Cookie/securityId/lid/encryptBossId/账号密码标记、HTML 或跳转链接都会被拒绝；jobDescription 只保留纯文本；服务端只持久化白名单规范化字段。
 - **插件 Token**：允许，且仅允许插件 Token。
 
 ### `POST /api/plugin/jobs/batch-capture`
 
-- **请求参数**：JSON `{ "captureId", "capturedAt", "platform", "jobs": [...] }`；第一版每批建议最多 50 条、压缩后请求体仍受上限；每条可含 `itemKey`。
-- **响应结构**：`200`，`data: { accepted, created, updated, rejected, items: [{ itemKey, jobId, status, error? }] }`。单条失败不回滚整批，但批次自身幂等。
-- **权限要求**：插件 Token，Scope `jobs:capture`。
-- **主要错误码**：批次级 `PAYLOAD_TOO_LARGE`、`UNSUPPORTED_PLATFORM`、`RATE_LIMITED`、`QUOTA_EXCEEDED`、`IDEMPOTENCY_CONFLICT`；条目级 `VALIDATION_ERROR`、`UNTRUSTED_JOB_URL`。
-- **user_id 隔离**：批内所有岗位强制使用 Token 的 `user_id` 和设备 ID，不接受条目级用户字段。
+- **请求参数**：JSON `{ "items": [<capture 条目>] }`，最多 100 条；条目字段与 `/capture` 相同（含 snake_case 别名）。
+- **响应结构**：`200`，`data: { items: [{ id, status: "created" | "duplicate" | "failed", errorCode?, message? }], created, duplicates, failed, total }`。每条独立校验与入库，单条失败不回滚整批；统计数与 `items` 严格一致（`total` 等于条目数，`created + duplicates + failed = total`）。
+- **权限要求**：插件 Token，Scope `jobs:write`。
+- **主要错误码**：批次级 `VALIDATION_ERROR`（超过 100 条/空批次）、`RATE_LIMITED`；条目级 `VALIDATION_ERROR`、`DEPENDENCY_UNAVAILABLE`。
+- **user_id 隔离**：批内所有岗位强制使用 Token 的 `user_id`，不接受条目级用户字段。
 - **插件 Token**：允许，且仅允许插件 Token。
 
 ### `GET /api/jobs`
 
-- **请求参数**：Query `page`、`size`、`platform`、`status`、`matchDecision`、`minScore`、`keyword`、`capturedFrom`、`capturedTo`、`sort`（白名单字段）。
+- **请求参数**：Query `page`、`size`、`platform`、`status`、`keyword`、`capturedFrom`、`capturedTo`、`sort`（白名单字段）。`matchDecision` 和 `minScore` 随阶段 5 AI 匹配实现。
 - **响应结构**：分页 `items`，每项 `{ id, platform, title, companyName, salary, location, status, latestMatchSummary, deliveryTaskStatus, lastSeenAt }`。
 - **权限要求**：Web Session。
 - **主要错误码**：`VALIDATION_ERROR`、`AUTH_REQUIRED`、`RATE_LIMITED`。

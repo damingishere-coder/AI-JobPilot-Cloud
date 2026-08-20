@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>投递牛马 Cloud Bridge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="popup">
+    <header class="header">
+      <h1>投递牛马 Cloud Bridge</h1>
+      <p class="subtitle">本地投递执行器</p>
+    </header>
+
+    <section id="bind-section" class="section hidden">
+      <label class="field">
+        <span>云端 API 地址</span>
+        <select id="api-base-select"></select>
+      </label>
+      <label class="field hidden" id="api-base-custom-field">
+        <span>自定义云端地址（远程仅 https，本地仅 localhost/127.0.0.1 带端口）</span>
+        <input id="api-base-input" type="text" maxlength="200" placeholder="https://api.example.com" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span>绑定码（在网页后台申请）</span>
+        <input id="bind-code-input" type="text" maxlength="11" placeholder="XXXXX-XXXXX" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span>设备显示名</span>
+        <input id="device-name-input" type="text" maxlength="100" placeholder="例如：我的 Chrome" autocomplete="off" />
+      </label>
+      <button id="bind-button" class="primary" type="button">绑定本机设备</button>
+    </section>
+
+    <section id="status-section" class="section hidden">
+      <div class="status-card">
+        <p class="status-line"><span class="dot ok" id="status-dot"></span><span id="status-text">已连接</span></p>
+        <dl>
+          <dt>云端地址</dt><dd id="api-base-display"></dd>
+          <dt>设备</dt><dd id="device-name"></dd>
+          <dt>浏览器</dt><dd id="device-browser"></dd>
+          <dt>扩展版本</dt><dd id="device-extension"></dd>
+          <dt>凭证有效期至</dt><dd id="token-expires"></dd>
+        </dl>
+      </div>
+      <div class="capture-actions">
+        <button id="capture-current-button" class="primary" type="button">上传当前岗位</button>
+        <button id="capture-batch-button" class="secondary" type="button">
+          上传已采集岗位<span id="capture-queue-count" class="queue-count hidden"></span>
+        </button>
+      </div>
+      <div class="execution-actions">
+        <div class="execution-status">
+          <span class="dot ok hidden" id="execution-dot"></span>
+          <span id="execution-status-text">执行队列：空闲</span>
+          <span id="execution-failures" class="queue-count hidden"></span>
+        </div>
+        <p class="hint" id="execution-summary">最近结果：成功 0 · 失败 0 · 需用户处理 0</p>
+        <button id="execution-start-button" class="primary" type="button">开始执行已确认任务</button>
+        <button id="execution-pause-button" class="secondary" type="button">暂停执行</button>
+      </div>
+      <button id="unbind-button" class="danger" type="button">解除本机绑定</button>
+      <p class="hint">解除绑定只清除本机保存的凭证与执行状态；如需服务端撤销设备，请在网页后台「设备管理」中操作。岗位上传仅支持已打开的 BOSS 直聘 / 智联招聘岗位详情页。首次绑定远程 https 云端地址时，Chrome 会请求该地址的访问授权，拒绝则无法连接云端。点击「开始执行」后才拉取并执行已确认任务；登录失效、验证码或风控会暂停并等待你在招聘平台页面处理；连续失败 3 次自动暂停本轮。</p>
+    </section>
+
+    <section id="message-section" class="section">
+      <p id="message" class="message hidden"></p>
+    </section>
+  </main>
+  <script src="cloud-client.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

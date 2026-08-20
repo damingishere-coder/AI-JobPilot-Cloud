@@ -27,6 +27,8 @@ db/
 .env
 .env.*
 !.env.example
+.secrets/
+backups/
 
 front/node_modules/
 front/.next/

@@ -1,9 +1,9 @@
 "use client";
 
 import "./globals.css";
-import Sidebar from "./components/Sidebar";
-import ContentArea from "./components/ContentArea";
 import { ThemeProvider } from "next-themes";
+import { AuthProvider } from "./components/AuthProvider";
+import AppShell from "./components/AppShell";
 
 export default function RootLayout({
   children,
@@ -27,12 +27,9 @@ export default function RootLayout({
           defaultTheme="light"
           enableSystem={false}
         >
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <ContentArea>
-              {children}
-            </ContentArea>
-          </div>
+          <AuthProvider>
+            <AppShell>{children}</AppShell>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
