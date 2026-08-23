@@ -361,7 +361,7 @@ PAUSED_NEED_USER
 
 - [ ] 是否有 `delivery_tasks` 表。
 - [ ] 是否有 `delivery_task_events` 表。
-- [ ] 任务是否绑定 `user_id`、`profile_id`、`job_post_id`、`job_match_id`。
+- [x] 验收决策（2026-08-24）：任务绑定 `user_id`、`job_post_id`；当前新建接口还必须解析并写入 `job_match_id`，由匹配固定具体简历和求职目标版本。`user_profiles.user_id` 是一对一主键，因此当前单档案产品范围不重复保存 `profile_id`；数据库 `job_match_id` 仍可空以兼容早期结构。未来若支持一个用户多份独立档案，必须新增独立 `profile_id` 和迁移。
 - [ ] 是否支持从 `job_match` 创建投递任务。
 - [ ] 重复创建同一个 `job_match` 是否幂等。
 - [ ] 用户是否可以确认投递。

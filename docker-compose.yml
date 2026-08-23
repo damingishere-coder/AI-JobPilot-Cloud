@@ -1,9 +1,16 @@
 name: ai-jobpilot-cloud
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_jobpilot}
       POSTGRES_USER: ${DB_MIGRATION_USERNAME:-jobpilot_owner}
@@ -28,6 +35,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: ["sh", "/usr/local/bin/start-redis.sh"]
     secrets:
       - redis_password
@@ -46,6 +54,7 @@ services:
   clamav:
     image: clamav/clamav:1.5.3-debian
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CLAMAV_NO_MILTERD: "true"
     volumes:
@@ -67,6 +76,7 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: "no"
+    logging: *default-logging
     group_add:
       - "${APP_RUNTIME_GID:-10001}"
     environment:
@@ -90,6 +100,7 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: unless-stopped
+    logging: *default-logging
     group_add:
       - "${APP_RUNTIME_GID:-10001}"
     read_only: true
@@ -160,6 +171,7 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: unless-stopped
+    logging: *default-logging
     group_add:
       - "${APP_RUNTIME_GID:-10001}"
     read_only: true
@@ -213,6 +225,7 @@ services:
       target: web-runtime
     image: ai-jobpilot-cloud-web:${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    logging: *default-logging
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -232,6 +245,7 @@ services:
   nginx:
     image: nginx:stable-alpine
     restart: unless-stopped
+    logging: *default-logging
     read_only: true
     tmpfs:
       - /var/cache/nginx:size=32m

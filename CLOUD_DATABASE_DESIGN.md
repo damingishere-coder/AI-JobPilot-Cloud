@@ -24,7 +24,7 @@ WHERE user_id = :current_user_id AND id = :resource_id
 
 客户端请求中的 `user_id` 一律忽略或拒绝。每个租户表建议建立 `UNIQUE (id, user_id)`，跨表关联使用 `(foreign_id, user_id)` 复合外键，阻止把 A 用户的岗位关联到 B 用户的任务。
 
-正式环境可增加 Row Level Security（RLS）作为纵深防御：事务开始时由受控连接设置 `app.current_user_id`，策略限制 `user_id = current_setting('app.current_user_id')::uuid`。后台任务和管理员使用独立数据库角色，管理员跨用户读取必须有业务授权和审计，不允许应用连接默认绕过 RLS。
+PostgreSQL 迁移已启用 Row Level Security（RLS）作为纵深防御：事务开始时由受控连接设置 `app.current_user_id`，策略限制 `user_id = current_setting('app.current_user_id')::uuid`。应用连接使用非 owner、非超级用户且无 `BYPASSRLS` 的独立角色；迁移 owner 不作为应用连接角色。管理员跨用户读取必须经受限接口、业务授权和审计，不能让普通应用查询默认绕过 RLS。
 
 ## 2. 核心关系
 
@@ -182,17 +182,15 @@ erDiagram
 | `company_info` | `jsonb` | 是 | 默认 `{}`，行业、规模、融资等必要字段 |
 | `skills` | `jsonb` | 是 | 默认 `[]` |
 | `welfare` | `jsonb` | 是 | 默认 `[]` |
-| `source_device_id` | `uuid` | 否 | 采集设备，复合 FK -> `plugin_devices` |
 | `source_captured_at` | `timestamptz` | 是 | 插件实际采集时间 |
 | `last_seen_at` | `timestamptz` | 是 | 最近一次重复采集时间 |
 | `status` | `varchar(24)` | 是 | `ACTIVE`、`EXPIRED`、`REMOVED` |
-| `raw_payload` | `jsonb` | 否 | 经过字段白名单和大小限制的调试数据，生产可关闭 |
 | `created_at` | `timestamptz` | 是 | 创建时间 |
 | `updated_at` | `timestamptz` | 是 | 更新时间 |
 
 索引建议：`UNIQUE (id, user_id)`；部分唯一索引 `UNIQUE (user_id, platform, external_job_id) WHERE external_job_id IS NOT NULL`；`UNIQUE (user_id, platform, fingerprint)`；列表索引 `(user_id, created_at DESC)`、`(user_id, platform, status, last_seen_at DESC)`；按实际筛选评估 `(user_id, company_name)`。
 
-隔离与关系：所有岗位均直接带 `user_id`；`job_matches`、`delivery_tasks` 使用复合外键关联，`source_device_id` 也必须与同一 `user_id` 匹配。
+隔离与关系：所有岗位均直接带 `user_id`；`job_matches`、`delivery_tasks` 使用包含 `user_id` 的复合外键关联。插件采集接口只把白名单字段写入岗位池，不保存原始页面载荷、Cookie、账号密码或浏览器缓存。
 
 ### 3.6 `job_matches`
 
@@ -233,12 +231,14 @@ erDiagram
 
 投递清单与插件执行状态的事实表。
 
+当前版本的 `user_profiles` 以 `user_id` 为主键，每个用户只有一份基础档案，因此 `delivery_tasks` 不重复保存 `profile_id`。任务通过 `user_id` 绑定这份一对一档案；当前新建接口始终解析并写入 `job_match_id`，从而固定本次匹配实际使用的 `resume_id` 与 `preference_id`。数据库字段仍可空以兼容早期结构，不能据此声称所有历史行都必然绑定匹配；只有未来正式支持“一个用户多份独立档案”时，才需要新增独立 `profile_id` 和迁移。
+
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `id` | `uuid` | 是 | 主键 |
 | `user_id` | `uuid` | 是 | 所属用户 |
 | `job_post_id` | `uuid` | 是 | 同用户岗位 |
-| `job_match_id` | `uuid` | 否 | 关联 AI 结果；允许用户不经 AI 手动创建 |
+| `job_match_id` | `uuid` | 否 | 关联 AI 结果；数据库保留可空兼容早期结构，当前创建接口始终解析并绑定一条已完成匹配 |
 | `assigned_device_id` | `uuid` | 否 | 指定执行设备，必须属于同一用户且有效 |
 | `status` | `varchar(32)` | 是 | 状态机字段 |
 | `greeting` | `text` | 否 | 用户最终确认的招呼语，限制长度 |
@@ -257,9 +257,9 @@ erDiagram
 | `created_at` | `timestamptz` | 是 | 创建时间 |
 | `updated_at` | `timestamptz` | 是 | 更新时间 |
 
-状态建议：`PENDING_CONFIRMATION`、`CONFIRMED`、`LEASED`、`EXECUTING`、`SUCCEEDED`、`FAILED`、`PAUSED`、`SKIPPED`、`CANCELLED`。对允许转换建立服务层状态机，数据库用 CHECK 限制枚举。
+现行状态：`WAITING_CONFIRM`、`CONFIRMED`、`PULLED_BY_PLUGIN`、`RUNNING`、`SUCCESS`、`FAILED`、`SKIPPED`、`PAUSED_NEED_USER`。服务层限制允许的转换，数据库 CHECK 只接受这八个值。
 
-索引建议：`UNIQUE (id, user_id)`；`UNIQUE (user_id, idempotency_key)`；防重复任务可建部分唯一索引 `UNIQUE (user_id, job_post_id) WHERE status IN ('PENDING_CONFIRMATION','CONFIRMED','LEASED','EXECUTING','PAUSED')`；列表索引 `(user_id, status, created_at DESC)`；插件领取索引 `(user_id, assigned_device_id, status, confirmed_at)`；租约恢复索引 `(status, lease_expires_at)`。
+索引：`UNIQUE (id, user_id)`；`UNIQUE (user_id, idempotency_key_hash)`；`UNIQUE (user_id, job_match_id) WHERE job_match_id IS NOT NULL` 保证同一匹配只创建一次；活动任务部分唯一索引覆盖 `WAITING_CONFIRM`、`CONFIRMED`、`PULLED_BY_PLUGIN`、`RUNNING`、`PAUSED_NEED_USER`；列表索引 `(user_id, status, created_at DESC)`；插件领取索引 `(user_id, assigned_device_id, status, confirmed_at)`；租约恢复索引 `(lease_expires_at) WHERE status = 'RUNNING'`。
 
 隔离与关系：岗位、匹配、设备均用带 `user_id` 的复合外键。插件 Token 的用户和设备必须同时匹配任务；插件不能自行改变 `confirmed_at`。
 
@@ -310,7 +310,7 @@ erDiagram
 
 索引建议：`UNIQUE (id, user_id)`；可选 `UNIQUE (user_id, device_fingerprint_hash) WHERE device_fingerprint_hash IS NOT NULL AND status = 'ACTIVE'`；`INDEX (user_id, status, last_seen_at DESC)`。
 
-隔离与关系：用户只能查看和撤销自己的设备；被 `plugin_tokens`、`job_posts.source_device_id`、`delivery_tasks.assigned_device_id` 引用。撤销设备时同一事务或可靠任务撤销全部 Token，并使未开始租约失效。
+隔离与关系：用户只能查看和撤销自己的设备；设备被 `plugin_tokens`、`delivery_tasks.assigned_device_id` 引用。撤销设备时同一事务或可靠任务撤销全部 Token，并使未开始租约失效。
 
 ### 3.10 `plugin_tokens`
 

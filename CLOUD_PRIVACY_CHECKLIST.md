@@ -43,7 +43,7 @@
 
 ## 5. 数据隔离与最小权限
 
-- [ ] 所有用户业务表按 `user_id` 隔离：服务层 `user_id + resource_id` 双重过滤 + PostgreSQL RLS（`FORCE ROW LEVEL SECURITY`，运行角色无 BYPASSRLS）。
+- [ ] 所有用户业务表按 `user_id` 隔离：服务层 `user_id + resource_id` 双重过滤 + PostgreSQL `ENABLE ROW LEVEL SECURITY`；运行角色必须是非表 owner、非超级用户且无 `BYPASSRLS`。迁移 owner 只用于迁移和受审阅的 `SECURITY DEFINER` 函数，不作为应用连接角色。
 - [ ] 客户端传入的 `userId` 参数被 `UserIdParameterFilter` 直接拒绝（400）。
 - [ ] 越权访问统一 404/403 响应结构，不泄露资源存在性与内部细节（覆盖简历、岗位、匹配、投递任务；集成测试 `TenantIsolationIntegrationTest` 全链路验证）。
 - [ ] 数据库运行角色 `jobpilot_app` 无 DDL 权限、无法直接读写 `audit_logs`（仅 SECURITY DEFINER 函数写入）；迁移使用独立 owner 角色。

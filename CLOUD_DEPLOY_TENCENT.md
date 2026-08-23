@@ -172,7 +172,7 @@ CVM 使用安全组，轻量应用服务器使用实例“防火墙”。上线�
 
 ## 7. 日志、监控与告警
 
-- API/Worker 生产日志走 stdout/stderr，Docker 日志配置必须设置大小/文件数量轮转；不要把简历全文、Prompt、Authorization、Cookie、密码或 AI Key 写入日志。
+- API/Worker 生产日志走 stdout/stderr；Compose 已为全部服务配置 `json-file` 大小/文件数量轮转，默认 `DOCKER_LOG_MAX_SIZE=10m`、`DOCKER_LOG_MAX_FILES=5`，生产可按磁盘与保留策略调整。更新该配置后必须重新创建容器，并用 `docker inspect` 确认实际生效；不要把简历全文、Prompt、Authorization、Cookie、密码或 AI Key 写入日志。
 - Nginx 使用结构化访问日志，过滤 Authorization/Cookie；错误日志和应用异常消息只保留脱敏类型/错误码。
 - 监控 `/livez`、`/readyz`、容器重启、磁盘、PostgreSQL/Redis、ClamAV、AI 错误率、队列积压、登录失败、插件异常速率和备份任务。
 - 备份失败、证书临期、Secret/KMS 读取失败、磁盘不足和安全组漂移必须告警；没有告警接收人和演练记录时不能判定生产就绪。
