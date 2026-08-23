@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="$ROOT/backups"
@@ -10,6 +11,7 @@ if [[ "$OUTPUT_NAME" == */* || "$OUTPUT_NAME" == *\\* || "$OUTPUT_NAME" != *.dum
 fi
 
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 cd "$ROOT"
 container_id="$(docker compose ps -q postgres)"
 if [[ -z "$container_id" ]]; then
@@ -19,5 +21,6 @@ fi
 
 docker compose exec -T postgres sh -ec 'exec pg_dump --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --format=custom --file=/tmp/ai-jobpilot-backup.dump'
 docker cp "$container_id:/tmp/ai-jobpilot-backup.dump" "$BACKUP_DIR/$OUTPUT_NAME"
+chmod 600 "$BACKUP_DIR/$OUTPUT_NAME"
 docker compose exec -T postgres rm -f /tmp/ai-jobpilot-backup.dump >/dev/null
 echo "PostgreSQL 备份完成：$BACKUP_DIR/$OUTPUT_NAME"
