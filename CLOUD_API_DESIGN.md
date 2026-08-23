@@ -301,10 +301,10 @@
 
 ### `POST /api/delivery/tasks`
 
-- **请求参数**：JSON `{ "jobPostId", "jobMatchId": null, "greeting": "..." }`；需 `Idempotency-Key`。创建后默认 `PENDING_CONFIRMATION`，不能通过请求直接设为已确认。
-- **响应结构**：`201`，`data: { id, jobPostId, jobMatchId, status: "PENDING_CONFIRMATION", greeting, version, createdAt }`。
+- **请求参数**：JSON `{ "jobMatchId", "jobPostId": null }`；两个 ID 至少提供一个，推荐提供 `jobMatchId`，同时提供时必须指向同一岗位；需 `Idempotency-Key`。BOSS 使用已完成匹配结果中的招呼语，ZHILIAN 的招呼语为空，其他平台拒绝创建；创建后固定为 `WAITING_CONFIRM`，不能通过请求直接设为已确认。
+- **响应结构**：`201`，`data: { id, jobPostId, jobMatchId, status: "WAITING_CONFIRM", greeting, version, confirmationVersion, confirmedAt, createdAt }`。
 - **权限要求**：Web Session + CSRF。
-- **主要错误码**：`RESOURCE_NOT_FOUND`、`DUPLICATE_ACTIVE_TASK`(409)、`GREETING_TOO_LONG`(422)、`IDEMPOTENCY_CONFLICT`、`QUOTA_EXCEEDED`（若任务计费）。
+- **主要错误码**：`RESOURCE_NOT_FOUND`、`BUSINESS_RULE_VIOLATION`(422)、`DUPLICATE_ACTIVE_TASK`(409)、`IDEMPOTENCY_CONFLICT`。创建待确认任务不扣额度，额度在用户确认时幂等扣减。
 - **user_id 隔离**：Job、Match 和新 Task 必须是当前用户；数据库复合外键再次约束。
 - **插件 Token**：不允许，插件不能创建或确认投递意图。
 
@@ -319,7 +319,7 @@
 
 ### `POST /api/delivery/tasks/:id/confirm`
 
-- **请求参数**：Path `id`；JSON `{ "version", "acknowledged": true, "assignedDeviceId": null }`；需 `Idempotency-Key`。可确认 `PENDING_CONFIRMATION`；用户处理后可重新确认 `PAUSED` 或允许重试的 `FAILED`。
+- **请求参数**：Path `id`；JSON `{ "version", "acknowledged": true, "assignedDeviceId": null }`；需 `Idempotency-Key`。可确认 `WAITING_CONFIRM`；用户处理后可重新确认 `PAUSED_NEED_USER` 或允许重试的 `FAILED`。
 - **响应结构**：`200`，`data: { id, status: "CONFIRMED", confirmationVersion, confirmedAt, assignedDeviceId, version }`。
 - **权限要求**：Web Session + CSRF，必须有明确用户动作，后台任务不得代调。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`CONFIRMATION_REQUIRED`(422)、`INVALID_STATE_TRANSITION`、`RESOURCE_VERSION_CONFLICT`、`DEVICE_NOT_AVAILABLE`(422)、`IDEMPOTENCY_CONFLICT`。
@@ -338,7 +338,7 @@
 ### `PUT /api/delivery/tasks/:id/greeting`
 
 - **请求参数**：Path `id`；JSON `{ "version", "greeting": "..." }`。
-- **响应结构**：`200`，`data: { id, greeting, status, confirmationRequired, version }`。已确认后修改招呼语必须清除旧确认并回到 `PENDING_CONFIRMATION`，执行中和已成功不可修改。
+- **响应结构**：`200`，`data: { id, greeting, status, confirmationRequired, version }`。已确认后修改招呼语必须清除旧确认并回到 `WAITING_CONFIRM`，执行中和已成功不可修改。
 - **权限要求**：Web Session + CSRF。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`GREETING_TOO_LONG`、`INVALID_STATE_TRANSITION`、`RESOURCE_VERSION_CONFLICT`。
 - **user_id 隔离**：只更新当前用户任务，并记录“内容变更导致重新确认”的事件。
@@ -349,16 +349,16 @@
 ### `GET /api/plugin/tasks/pending`
 
 - **请求参数**：Query `limit`（默认 10，最大 20）、可选 `platform`；Header 可带 `X-Extension-Version`。
-- **响应结构**：`200`，`data: { items: [{ id, version, platform, jobUrl, externalJobId, title, companyName, greeting, confirmedAt, confirmationVersion }], pollAfterSeconds, serverTime }`。只返回执行必要字段。
+- **响应结构**：`200`，`data: { items: [{ id, version, status: "PULLED_BY_PLUGIN", platform, jobUrl, externalJobId, title, companyName, greeting, confirmedAt, confirmationVersion }], pollAfterSeconds, serverTime }`。领取在数据库事务中原子完成 `CONFIRMED -> PULLED_BY_PLUGIN`；同一设备重试会重放尚未 start 的已领取任务。只返回执行必要字段。
 - **权限要求**：插件 Token，Scope `tasks:read`；设备状态必须 ACTIVE，插件版本兼容。
 - **主要错误码**：`PLUGIN_TOKEN_INVALID`、`PLUGIN_TOKEN_EXPIRED`、`DEVICE_REVOKED`、`FORBIDDEN`、`EXTENSION_UPGRADE_REQUIRED`、`RATE_LIMITED`。
-- **user_id 隔离**：只查询 Token 用户的 `CONFIRMED` 任务，并匹配未指定设备或当前设备；不返回简历、Cookie 或其他用户任务。
+- **user_id 隔离**：新领取只查询 Token 用户的 `CONFIRMED` 任务，并匹配未指定设备或当前设备；重放只查询同一 Token 用户、同一设备尚未 start 的 `PULLED_BY_PLUGIN` 任务。不返回简历、Cookie 或其他用户任务。
 - **插件 Token**：允许，且仅允许插件 Token。
 
 ### `POST /api/plugin/tasks/:id/start`
 
 - **请求参数**：Path `id`；JSON `{ "version", "executionId", "extensionVersion", "pageUrl" }`；需 `Idempotency-Key`。`pageUrl` 只保留受支持域名和必要路径，服务端不抓取页面。
-- **响应结构**：`200`，`data: { id, status: "EXECUTING", leaseId, leaseExpiresAt, version, task: { platform, jobUrl, greeting } }`。服务器原子完成 `CONFIRMED -> LEASED/EXECUTING` 和短租约。
+- **响应结构**：`200`，`data: { id, status: "RUNNING", leaseId, leaseExpiresAt, version, attemptNumber, task: { platform, jobUrl, greeting } }`。服务器原子完成 `PULLED_BY_PLUGIN -> RUNNING` 并建立短租约。
 - **权限要求**：插件 Token，Scopes `tasks:read tasks:write`。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`TASK_ALREADY_CLAIMED`(409)、`INVALID_STATE_TRANSITION`、`RESOURCE_VERSION_CONFLICT`、`DEVICE_REVOKED`、`IDEMPOTENCY_CONFLICT`。
 - **user_id 隔离**：Token 的 `user_id` 和设备必须匹配任务归属/分配；领取条件在单条原子 SQL 中完成。
@@ -367,7 +367,7 @@
 ### `POST /api/plugin/tasks/:id/success`
 
 - **请求参数**：Path `id`；JSON `{ "leaseId", "executionId", "version", "completedAt", "resultCode": "DELIVERED", "evidence": { "pageState": "SUCCESS_NOTICE" } }`；需 `Idempotency-Key`。证据只允许枚举/短文本，不上传截图或页面全文。
-- **响应结构**：`200`，`data: { id, status: "SUCCEEDED", finishedAt, version }`。重复的同一成功事件返回相同结果。
+- **响应结构**：`200`，`data: { id, status: "SUCCESS", finishedAt, version }`。重复的同一成功事件返回相同结果。
 - **权限要求**：插件 Token，Scope `tasks:write`。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`LEASE_INVALID`(409)、`LEASE_EXPIRED`(409)、`INVALID_STATE_TRANSITION`、`RESOURCE_VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT`。
 - **user_id 隔离**：同时校验 Token 用户、设备、`leaseId` 和执行 ID；成功终态受保护，不被后续失败覆盖。
@@ -384,8 +384,8 @@
 
 ### `POST /api/plugin/tasks/:id/pause`
 
-- **请求参数**：Path `id`；JSON `{ "leaseId", "executionId", "version", "pausedAt", "reason": "CAPTCHA_REQUIRED", "message": "页面要求人工验证" }`；Reason 仅允许 `CAPTCHA_REQUIRED`、`LOGIN_REQUIRED`、`RISK_CONTROL`、`PAGE_CHANGED`、`USER_ACTION_REQUIRED`。
-- **响应结构**：`200`，`data: { id, status: "PAUSED", pauseReason, userActionRequired: true, leaseReleased: true, version }`。
+- **请求参数**：Path `id`；JSON `{ "leaseId", "executionId", "version", "pausedAt", "reason": "CAPTCHA_REQUIRED", "message": "页面要求人工验证" }`；Reason 仅允许 `CAPTCHA_REQUIRED`、`LOGIN_REQUIRED`、`RISK_CONTROL`。页面结构变化使用 fail 的 `PAGE_STRUCTURE_CHANGED`，不得伪装成人工验证暂停。
+- **响应结构**：`200`，`data: { id, status: "PAUSED_NEED_USER", pauseReason, userActionRequired: true, leaseReleased: true, version }`。
 - **权限要求**：插件 Token，Scope `tasks:write`。
 - **主要错误码**：`RESOURCE_NOT_FOUND`、`LEASE_INVALID`、`INVALID_STATE_TRANSITION`、`UNSUPPORTED_PAUSE_REASON`(422)、`RESOURCE_VERSION_CONFLICT`。
 - **user_id 隔离**：只暂停 Token 用户且由当前设备领取的任务；释放租约，Web 明确提示用户处理并重新确认。
