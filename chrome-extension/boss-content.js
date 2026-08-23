@@ -67,6 +67,10 @@
       sendResponse(handleBossDebugCollect());
       return;
     }
+    if (message?.type === "CLOUD_CAPTURE_COLLECT") {
+      sendResponse(handleCloudCaptureCollect());
+      return;
+    }
     if (message?.type === "BOSS_COLLECT_CURRENT_PAGE") {
       handleBossCurrentPageCollect(message).then(sendResponse).catch((error) => {
         const diagnostics = collectBossDiagnostics();
@@ -106,6 +110,11 @@
     }
     if (message?.type === "BOSS_SCAN_START") {
       handleScanStartMessage(message, sendResponse);
+      return true;
+    }
+    if (message?.type === "BOSS_DELIVER_CURRENT_V2" && message?.cloudManaged) {
+      prepareStandaloneDelivery();
+      handleCloudDeliverCurrentMessage(message, sendResponse);
       return true;
     }
     if (message?.type === "BOSS_DELIVER_CURRENT_V2") {
@@ -166,6 +175,42 @@
       impact: diagnostic.impact,
       suggestion: diagnostic.suggestion,
       ...diagnostics
+    };
+  }
+
+  /**
+   * P7 岗位采集：只采集当前岗位详情页的固定白名单字段，返回给 background
+   * 做二次清洗。绝不回传 securityId/lid/encryptBossId/Cookie/账号密码/
+   * 页面脚本或原始 HTML；非岗位详情页直接拒绝。
+   */
+  function handleCloudCaptureCollect() {
+    const diagnostics = collectBossDiagnostics();
+    if (diagnostics.isSecurityPage) {
+      return { success: false, message: "检测到安全验证页，本工具不会绕过验证码，请手动完成后重试" };
+    }
+    if (diagnostics.isLoginPage) {
+      return { success: false, message: "请先在 Chrome 中登录Boss直聘后再采集" };
+    }
+    const jobId = extractBossId(window.location.href);
+    const detail = extractBossDetailFields({});
+    if (!jobId || !compact(detail.title)) {
+      return { success: false, message: "当前页面不是有效的Boss岗位详情页" };
+    }
+    return {
+      success: true,
+      platform: "BOSS",
+      jobId,
+      currentUrl: window.location.href,
+      title: detail.title,
+      salary: detail.salary,
+      location: detail.location,
+      experience: detail.experience,
+      degree: detail.degree,
+      company: detail.company,
+      companyScale: detail.companyScale,
+      industry: detail.industry,
+      hrName: detail.hrName,
+      description: detail.description
     };
   }
 
@@ -2782,6 +2827,110 @@
     });
   }
 
+  // ---- Cloud 托管投递：只回传受控字段，不调用旧 delivery-result 接口 ----
+  // Token、lease、executionId 不会进入本 content script；greeting 只写入平台聊天
+  // 输入框，不写入日志/进度/证据。遇到验证码、登录失效、风控、页面结构变化或
+  // 需要人工选择时立即停止，不自动解决、不继续点击。
+
+  function handleCloudDeliverCurrentMessage(message, sendResponse) {
+    let responded = false;
+    const respondOnce = (payload) => {
+      if (responded) return;
+      responded = true;
+      try {
+        sendResponse(payload);
+      } catch {
+        // Cloud 路径不把原始运行时异常写入招聘页面控制台。
+      }
+    };
+
+    deliverCloudManagedOnCurrentPage(message.task, { ...message, cloudManaged: true }, respondOnce)
+      .then(respondOnce)
+      .catch(() => {
+        respondOnce(cloudFailure("UNKNOWN_ERROR", "Boss云端投递执行异常"));
+      });
+  }
+
+  function cloudFailure(failureType, message) {
+    return { success: false, failureType, message };
+  }
+
+  /** 页面级阻断原因：返回固定枚举，不转发页面文本。 */
+  function cloudBossPageFailure() {
+    const text = compact(document.body?.innerText || "");
+    if (isStrongLoginPrompt(text, window.location.href)) return "LOGIN_REQUIRED";
+    if (/(验证码|滑块验证|人机校验|安全验证|拖动.{0,8}滑块|扫码确认)/.test(text)) return "CAPTCHA_REQUIRED";
+    if (/(访问过于频繁|异常访问|操作过于频繁|账号异常|风控|沟通次数.{0,8}已用完|沟通上限|已达上限)/.test(text)) return "RISK_CONTROL";
+    if (/(职位已关闭|停止招聘|职位不存在|该职位.{0,8}不存在|岗位已下线|暂停招聘)/.test(text)) return "JOB_EXPIRED";
+    if (/(请先完善在线简历|请上传简历|实名认证)/.test(text)) return "PAGE_STRUCTURE_CHANGED";
+    return "";
+  }
+
+  function classifyCloudBossFailure(message) {
+    const text = compact(message || "");
+    if (/(登录|扫码|重新登录)/.test(text)) return "LOGIN_REQUIRED";
+    if (/(安全验证|验证码|滑块|验证)/.test(text)) return "CAPTCHA_REQUIRED";
+    if (/(访问过于频繁|异常访问|账号异常|风控|频繁)/.test(text)) return "RISK_CONTROL";
+    if (/(职位已关闭|停止招聘|职位不存在|岗位关闭|已下线|暂停招聘)/.test(text)) return "JOB_EXPIRED";
+    if (/(完善简历|上传简历|实名认证)/.test(text)) return "PAGE_STRUCTURE_CHANGED";
+    return "PAGE_STRUCTURE_CHANGED";
+  }
+
+  async function deliverCloudManagedOnCurrentPage(task, message, earlyRespond) {
+    if (!task?.url || !task?.id) {
+      return cloudFailure("BUTTON_NOT_FOUND", "投递任务缺少岗位链接");
+    }
+    await waitForPage();
+    if (!isSameBossJobUrl(window.location.href, task.url)) {
+      return cloudFailure("PAGE_STRUCTURE_CHANGED", "当前页面不是目标岗位详情页");
+    }
+
+    const initialFailure = cloudBossPageFailure();
+    if (initialFailure) return cloudFailure(initialFailure, "Boss页面状态异常");
+    await sleep(1500);
+
+    // 页面已明确“继续沟通/已沟通”：ALREADY_DELIVERED，不再次发送 greeting。
+    if (findBossDeliverButton(["继续沟通", "已沟通"], []) && !findBossDeliverButton(["立即沟通"], ["不感兴趣"])) {
+      return { success: true, resultCode: "ALREADY_DELIVERED", pageState: "ALREADY_DELIVERED", message: "Boss岗位已处于沟通状态" };
+    }
+
+    const favoriteButton = findBossDeliverButton(["感兴趣"], ["不感兴趣"])
+      || findClickable(["感兴趣", "收藏该岗位", "收藏"]);
+    if (favoriteButton) {
+      clickElement(favoriteButton);
+      await sleep(600);
+    }
+
+    let chatButton = findBossDeliverButton(["立即沟通"], ["不感兴趣"]);
+    if (!chatButton && favoriteButton) {
+      chatButton = await waitForBossDeliverButton(["立即沟通"], ["不感兴趣"], 3500);
+    }
+    if (!chatButton) {
+      if (findBossDeliverButton(["继续沟通", "已沟通"], [])) {
+        return { success: true, resultCode: "ALREADY_DELIVERED", pageState: "ALREADY_DELIVERED", message: "Boss岗位已处于沟通状态" };
+      }
+      const missingFailure = cloudBossPageFailure();
+      if (missingFailure) return cloudFailure(missingFailure, "Boss页面状态异常");
+      return cloudFailure("BUTTON_NOT_FOUND", "未找到立即沟通按钮");
+    }
+
+    // 点击前先记录基准 URL：同步跳转会丢失点击前的页面基准。
+    const beforeUrl = window.location.href;
+    clickElement(chatButton);
+    const deliveryCheck = await waitForDeliveryOpened(beforeUrl, task, 9000);
+    if (!deliveryCheck.success) {
+      if (findBossDeliverButton(["继续沟通", "已沟通"], [])) {
+        return { success: true, resultCode: "ALREADY_DELIVERED", pageState: "ALREADY_DELIVERED", message: "Boss岗位已处于沟通状态" };
+      }
+      const openedFailure = cloudBossPageFailure() || classifyCloudBossFailure(deliveryCheck.message);
+      return cloudFailure(openedFailure, "Boss沟通未成功打开");
+    }
+
+    // 新沟通成功后再发送服务器已确认的 greeting；greeting 内容不进日志/进度/证据。
+    await sendConfiguredGreeting(task, message);
+    return { success: true, resultCode: "DELIVERED", pageState: "SUCCESS_NOTICE", message: "Boss岗位已完成沟通" };
+  }
+
   async function deliverOnCurrentPage(task, message, earlyRespond) {
     if (!task?.url || !task?.id) {
       return { success: false, message: "投递任务缺少岗位链接或ID" };
@@ -3034,6 +3183,8 @@
   }
 
   function postProgress(message, type, text, meta = {}) {
+    // Cloud 托管投递的页面事件只允许 taskId + 稳定 stage/code/message/time。
+    if (message?.cloudManaged) return;
     chrome.runtime.sendMessage({
       source: "GET_JOBS_PLATFORM",
       pageTabId: message.pageTabId,

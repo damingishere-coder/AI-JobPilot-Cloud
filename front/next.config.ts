@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     API_BASE_URL: serverConfig.api.baseUrl,
     APP_NAME: serverConfig.app.name,
     APP_VERSION: serverConfig.app.version,
+    CLOUD_LOGIN_REQUIRED: process.env.CLOUD_LOGIN_REQUIRED ?? 'true',
   },
 
   // 禁用图片优化（静态导出不支持）

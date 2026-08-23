@@ -2,7 +2,7 @@ spring:
   application:
     name: ai-jobpilot-cloud
   profiles:
-    active: dev
+    default: dev
   info:
     app:
       name: AI-JobPilot-Cloud｜投递牛马云端版
@@ -11,22 +11,6 @@ spring:
   banner:
     charset: UTF-8
     location: classpath:banner.txt
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:sqlite:./db/getjobs.db}
-    driver-class-name: org.sqlite.JDBC
-    hikari:
-      maximum-pool-size: 5
-      connection-test-query: SELECT 1
-  sql:
-    init:
-      mode: never  # 数据库文件已存在，不需要自动初始化
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 4
-    baseline-description: Existing Java schema baseline
-    validate-on-migrate: true
   servlet:
     multipart:
       max-file-size: 30MB
@@ -41,6 +25,11 @@ server:
 
 app:
   auto-open-browser: ${APP_AUTO_OPEN_BROWSER:true}
+  cors:
+    # 精确来源白名单（本地桌面应用）：只允许本机前端端口，部署环境必须显式配置，禁止通配符。
+    allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:6866,http://127.0.0.1:6866}
+    # 精确扩展 Origin（公开信息，非秘密）：默认等于 manifest 固定公钥派生的开发扩展 ID。
+    allowed-extension-origins: ${APP_ALLOWED_EXTENSION_ORIGINS:chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc}
   paths:
     data-dir: ${APP_DATA_DIR:./data}
     output-dir: ${APP_OUTPUT_DIR:./output}
@@ -60,6 +49,11 @@ app:
     command: ${APP_OPENCLAW_COMMAND:}
     profile: ${APP_OPENCLAW_PROFILE:openclaw}
     detail-limit: ${APP_OPENCLAW_DETAIL_LIMIT:5}
+  quota:
+    # 免费计划每月额度默认值（非敏感），允许环境变量覆盖。
+    free:
+      analysis: ${APP_QUOTA_FREE_ANALYSIS:20}
+      delivery: ${APP_QUOTA_FREE_DELIVERY:10}
 
 # 日志配置
 logging:

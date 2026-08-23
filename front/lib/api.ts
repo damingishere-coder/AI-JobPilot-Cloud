@@ -6,6 +6,10 @@ export type ApiEnvelope<T> = {
   success?: boolean
   data?: T
   message?: string
+  error?: {
+    code?: string
+    message?: string
+  }
 }
 
 const fallbackForStatus = (response: Response, fallback: string) => {
@@ -38,7 +42,7 @@ export const readApiResponse = async <T>(
   }
 
   if (!response.ok || result?.success === false) {
-    throw new Error(result?.message || fallbackForStatus(response, fallback))
+    throw new Error(result?.error?.message || result?.message || fallbackForStatus(response, fallback))
   }
   if (!result) {
     throw new Error(fallback)

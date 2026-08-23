@@ -106,6 +106,10 @@
       });
       return true;
     }
+    if (messageType === "ZHILIAN_DELIVER_CURRENT" && message?.cloudManaged) {
+      handleCloudDeliverCurrentMessage(message, sendResponse);
+      return true;
+    }
     if (messageType === "ZHILIAN_DELIVER_CURRENT") {
       handleDeliverCurrentMessage(message, sendResponse);
       return true;
@@ -117,6 +121,10 @@
     if (messageType === "ZHILIAN_DELIVER_BATCH") {
       deliverBatch(message.tasks || [], message).then(sendResponse).catch((error) => sendResponse({ success: false, message: error.message || String(error) }));
       return true;
+    }
+    if (messageType === "CLOUD_CAPTURE_COLLECT") {
+      sendResponse(handleCloudCaptureCollect());
+      return;
     }
   });
 
@@ -1342,6 +1350,39 @@
     };
   }
 
+  /**
+   * P7 岗位采集：只采集当前岗位详情页的固定白名单字段，返回给 background
+   * 做二次清洗。绝不回传平台加密 ID/Cookie/账号密码/页面脚本或原始 HTML；
+   * 非岗位详情页直接拒绝。
+   */
+  function handleCloudCaptureCollect() {
+    if (!isZhilianJobDetailUrl(window.location.href)) {
+      return { success: false, message: "当前页面不是有效的智联招聘岗位详情页" };
+    }
+    const title = zhilianDetailTitle();
+    const jobId = extractUrlId(window.location.href);
+    if (!jobId || !compact(title)) {
+      return { success: false, message: "当前页面不是有效的智联招聘岗位详情页" };
+    }
+    const tags = zhilianDetailTags();
+    const bodyText = compact(document.body?.innerText || "");
+    return {
+      success: true,
+      platform: "ZHILIAN",
+      jobId,
+      currentUrl: window.location.href,
+      title,
+      salary: textOf(document, ["[class*='salary']", "[class*='job-salary']", "[class*='jobDetailSalary']"]) || firstMatch(bodyText, /(?:\d+(?:\.\d+)?[Kk]-?\d*(?:\.\d+)?[Kk](?:·\d+薪)?|\d+(?:\.\d+)?[Kk]以上|面议)/),
+      location: tags.location,
+      experience: tags.experience,
+      degree: tags.degree,
+      company: zhilianDetailCompany(),
+      industry: firstMatch(bodyText, /(互联网|软件|金融|制造|教育|医疗|能源|通信|电商|人工智能|大数据|云计算|汽车|房地产|快消|物流|传媒|游戏|集成电路|新能源|医药|咨询|服务业|贸易)[^\s，,。]{0,20}/),
+      hrName: firstMatch(bodyText, /(?:HR|人事|招聘者|联系人)[:：\s]*([^\s，,。]{1,20})/),
+      description: zhilianDetailDescription()
+    };
+  }
+
   function enrichZhilianJobFromCurrentDetail(job, message, detailIndex, detailTotal) {
     const listDescription = job.description || "";
     try {
@@ -1412,6 +1453,101 @@
       });
       respondOnce({ success: false, message: error.message || String(error) });
     });
+  }
+
+  // ---- Cloud 托管投递：只回传受控字段，不调用旧 delivery-result 接口 ----
+  // 智联不使用 greeting；只有检测到明确的“已投递/申请成功”状态才 success，
+  // 点击后无法确认结果时 fail PAGE_STRUCTURE_CHANGED，不能乐观上报成功。
+
+  function handleCloudDeliverCurrentMessage(message, sendResponse) {
+    let responded = false;
+    const respondOnce = (payload) => {
+      if (responded) return;
+      responded = true;
+      try {
+        sendResponse(payload);
+      } catch {
+        // Cloud 路径不把原始运行时异常写入招聘页面控制台。
+      }
+    };
+
+    deliverCloudManagedOnCurrentPage(message.task, { ...message, cloudManaged: true }, respondOnce)
+      .then(respondOnce)
+      .catch(() => {
+        respondOnce(cloudFailure("UNKNOWN_ERROR", "智联云端投递执行异常"));
+      });
+  }
+
+  function cloudFailure(failureType, message) {
+    return { success: false, failureType, message };
+  }
+
+  /** 页面级阻断原因：返回固定枚举，不转发页面文本。 */
+  function cloudZhilianPageFailure() {
+    const text = compact(document.body?.innerText || "");
+    if (isStrongLoginPrompt(text, window.location.href)) return "LOGIN_REQUIRED";
+    if (/(验证码|滑块验证|人机校验|安全验证|拖动.{0,8}滑块|扫码确认)/.test(text)) return "CAPTCHA_REQUIRED";
+    if (/(访问过于频繁|异常访问|操作过于频繁|账号异常|风控|投递.{0,8}已用完|投递上限)/.test(text)) return "RISK_CONTROL";
+    if (/(职位已关闭|停止招聘|职位不存在|岗位已下线|已暂停招聘)/.test(text)) return "JOB_EXPIRED";
+    if (/(请先完善简历|请上传简历|实名认证)/.test(text)) return "PAGE_STRUCTURE_CHANGED";
+    return "";
+  }
+
+  async function deliverCloudManagedOnCurrentPage(task, message, earlyRespond) {
+    if (!task?.url || !task?.id) {
+      return cloudFailure("BUTTON_NOT_FOUND", "投递任务缺少岗位链接");
+    }
+    await waitForPage();
+    if (!isCurrentZhilianJobDetailPage(task.url) && !isSameUrl(window.location.href, task.url)) {
+      return cloudFailure("PAGE_STRUCTURE_CHANGED", "当前页面不是目标岗位详情页");
+    }
+
+    const initialFailure = cloudZhilianPageFailure();
+    if (initialFailure) return cloudFailure(initialFailure, "智联页面状态异常");
+    await sleep(1500);
+
+    // 明确“已投递/申请成功”状态：ALREADY_DELIVERED。
+    if (detectZhilianDeliveryStatus(document)) {
+      return { success: true, resultCode: "ALREADY_DELIVERED", pageState: "ALREADY_DELIVERED", message: "智联岗位已是已投递状态" };
+    }
+
+    const pageFailure = detectZhilianDeliveryFailure("");
+    if (pageFailure && /(职位已关闭|停止招聘|职位不存在|岗位已下线|已暂停招聘)/.test(pageFailure)) {
+      return cloudFailure("JOB_EXPIRED", "智联岗位已关闭");
+    }
+
+    let applyButton = findZhilianActionButton(["立即投递", "申请职位", "投递简历", "投递"], ["已投递", "已申请", "投递成功", "申请成功"]);
+    if (!applyButton) {
+      const missingFailure = cloudZhilianPageFailure();
+      if (missingFailure) return cloudFailure(missingFailure, "智联页面状态异常");
+      return cloudFailure("BUTTON_NOT_FOUND", "未找到智联投递按钮");
+    }
+
+    clickElement(applyButton);
+    await sleep(1500);
+
+    if (detectZhilianDeliveryStatus(document)) {
+      return { success: true, resultCode: "DELIVERED", pageState: "SUCCESS_NOTICE", message: "智联岗位已投递" };
+    }
+
+    const clickedFailure = cloudZhilianPageFailure();
+    if (clickedFailure) return cloudFailure(clickedFailure, "智联页面状态异常");
+
+    const confirm = await waitForZhilianActionButton(["确认投递", "确定", "继续投递"], ["取消"], 2500);
+    if (confirm) {
+      clickElement(confirm);
+      await sleep(1200);
+    }
+
+    if (detectZhilianDeliveryStatus(document)) {
+      return { success: true, resultCode: "DELIVERED", pageState: "SUCCESS_NOTICE", message: "智联岗位已投递" };
+    }
+
+    const finalFailure = cloudZhilianPageFailure();
+    if (finalFailure) return cloudFailure(finalFailure, "智联页面状态异常");
+
+    // 点击后无法确认明确成功状态：不乐观上报成功，交给用户人工确认。
+    return cloudFailure("PAGE_STRUCTURE_CHANGED", "无法确认智联投递是否成功");
   }
 
   async function deliverOnCurrentPage(task, message = {}, earlyRespond) {
@@ -1595,6 +1731,8 @@
   }
 
   function postProgress(message, type, text, meta = {}) {
+    // Cloud 托管投递的页面事件只允许 taskId + 稳定 stage/code/message/time。
+    if (message?.cloudManaged) return;
     chrome.runtime.sendMessage({
       source: "GET_JOBS_PLATFORM",
       pageTabId: message.pageTabId,

@@ -17,9 +17,13 @@ class ProjectConfigurationSmokeTest {
     @Test
     void readsApplicationYamlConfiguration() throws Exception {
         JsonNode root = yamlMapper.readTree(Path.of("src/main/resources/application.yaml").toFile());
+        JsonNode dev = yamlMapper.readTree(Path.of("src/main/resources/application-dev.yaml").toFile());
+        JsonNode cloud = yamlMapper.readTree(Path.of("src/main/resources/application-cloud.yaml").toFile());
 
         assertThat(root.path("server").path("port").asText()).contains("8888");
-        assertThat(root.path("spring").path("datasource").path("url").asText()).contains("jdbc:sqlite");
+        assertThat(root.path("spring").path("profiles").path("default").asText()).isEqualTo("dev");
+        assertThat(dev.path("spring").path("datasource").path("url").asText()).contains("jdbc:sqlite");
+        assertThat(cloud.path("spring").path("datasource").path("url").asText()).contains("jdbc:postgresql");
         assertThat(root.path("app").path("paths").path("data-dir").asText()).contains("APP_DATA_DIR");
     }
 

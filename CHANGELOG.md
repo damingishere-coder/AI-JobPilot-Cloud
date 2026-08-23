@@ -8,6 +8,8 @@
 
 ### Added
 
+- P7 插件绑定码（PostgreSQL 哈希持久化）、设备心跳与岗位采集上传 API
+- Web 「浏览器插件」页（绑定码生成与设备撤销）与扩展岗位上传弹窗能力
 - CodeQL Java / Kotlin 与 JavaScript / TypeScript 安全扫描
 - Chrome 扩展 Manifest、引用文件和 JavaScript 语法自动校验
 - Docker Compose 与 Dockerfile 阶段配置检查
@@ -23,6 +25,8 @@
 - Dependabot 默认只自动提交 Minor 与 Patch 更新，避免未经评估的大版本升级
 - 中英文 README 增加 CodeQL、Release、下载说明和文档中心入口
 - 安全文档增加自动化检查和 Release 数据边界
+- P7 岗位采集直接写入云端岗位池 `job_posts`（不建独立采集表、不存 raw_payload），与 Web 岗位列表、AI 匹配与投递流程共用同一行；采集契约支持 snake_case 精确别名，批次响应增加与条目严格一致的 created/duplicates/failed/total 统计
+- Chrome 扩展支持自定义云端 API 地址（远程仅 https 合法 Origin，本地仅 localhost/127.0.0.1 带端口），绑定远程地址时按需请求精确主机权限，拒绝则绑定失败；采集上传改为逐条重试（退避），本地队列元数据绝不进入请求体
 
 ### 计划中
 
