@@ -24,3 +24,7 @@ spring:
 
 app:
   role: migrate
+
+logging:
+  file:
+    name: ""
