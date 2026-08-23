@@ -67,6 +67,8 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: "no"
+    group_add:
+      - "${APP_RUNTIME_GID:-10001}"
     environment:
       SPRING_PROFILES_ACTIVE: cloud,migrate
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
@@ -88,6 +90,8 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: unless-stopped
+    group_add:
+      - "${APP_RUNTIME_GID:-10001}"
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777
@@ -156,6 +160,8 @@ services:
     image: ai-jobpilot-cloud-app:${APP_IMAGE_TAG:-local}
     pull_policy: never
     restart: unless-stopped
+    group_add:
+      - "${APP_RUNTIME_GID:-10001}"
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777

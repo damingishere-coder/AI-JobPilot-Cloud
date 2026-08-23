@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_URL="http://localhost:8080"
 SECRET_DIR="$ROOT/.secrets"
+APP_RUNTIME_GID="$(id -g)"
+export APP_RUNTIME_GID
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "错误：没有找到 docker 命令。请先安装并启动 Docker Desktop。" >&2
@@ -24,6 +26,11 @@ for name in db_owner_password db_app_password redis_password auth_hash_pepper da
     echo "已生成本机 Secret：$name"
   fi
 done
+if [[ ! -e "$SECRET_DIR/ai_api_key" ]]; then
+  : > "$SECRET_DIR/ai_api_key"
+  echo "已创建空的本机 Secret：ai_api_key（未配置 AI 时保持为空）"
+fi
+chmod 640 "$SECRET_DIR"/*
 
 cd "$ROOT"
 docker compose config --quiet

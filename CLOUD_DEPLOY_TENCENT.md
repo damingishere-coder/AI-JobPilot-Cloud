@@ -1,10 +1,10 @@
 # AI-JobPilot-Cloud 腾讯云部署说明（P10）
 
-本文是腾讯云 CVM + Docker Compose 的部署说明和人工验收基线。**当前仓库没有连接腾讯云、没有申请证书、没有创建安全组，也没有声称已经完成生产部署。** 文中的域名、IP、证书和 Secret 都是占位或操作说明，不能直接当作真实资源。
+本文是腾讯云 CVM/轻量应用服务器 + Docker Compose 的部署说明和人工验收基线。仓库脚本不会自动购买云资源、申请域名/证书或修改腾讯云防火墙；是否已完成某台主机的部署，必须以当次人工验收记录为准。文中的域名、IP、证书和 Secret 都是占位或操作说明，不能直接当作真实资源。
 
 ## 1. 目标拓扑
 
-生产建议使用一台受控 CVM（或等价的容器主机）承载 Compose，公网只到宿主机 Nginx：
+生产建议使用一台受控 CVM、轻量应用服务器（或等价容器主机）承载 Compose，公网只到宿主机 Nginx：
 
 ```text
 用户/插件 -- HTTPS 443 --> 宿主机 Nginx -- HTTP loopback --> 127.0.0.1:8080 Compose Nginx
@@ -16,16 +16,43 @@
 
 宿主机示例 `deploy/nginx/https.conf.example` 只反代到 `127.0.0.1:8080`；不要把它改成直接访问 Compose 内的 `api:8888` 或 `web:6866`。Compose 的 `nginx` 端口绑定默认是 `127.0.0.1:8080`，不是公网监听。
 
-## 2. CVM、目录和权限
+## 2. 云主机、目录和权限
 
 上线前由运维人工确认：
 
 - 使用受支持的 Linux 发行版、Docker Engine 和 Compose v2；磁盘容量按 PostgreSQL、私有文件、ClamAV 病毒库、镜像和备份增长预留，并设置磁盘告警。
 - 使用专用非 root 运维账号执行 Compose；Docker socket 属于高权限资源，只授予受控运维组。
 - 项目目录只放代码、Compose、模板和无秘密 `.env.example`；生产 `.env`、`.secrets/`、证书私钥、备份和日志放在独立受限目录。
-- `.secrets/` 目录权限建议 `0700`，Secret 文件 `0600`，证书私钥只读且仅 Nginx 进程/受控运维账号可读；禁止通过 Git、Issue、CI Artifact 或聊天工具传输。
+- `.secrets/` 目录权限使用 `0700`；Linux Compose 的文件型 Secret 是只读 bind mount，Java 容器又使用独立非 root UID，因此 Secret 文件使用 `0640`，并通过 `APP_RUNTIME_GID` 仅把运维账号主组补充给需要 Secret 的容器。不要改成 `0644`；证书私钥仍只允许 Nginx 进程/受控运维账号读取。禁止通过 Git、Issue、CI Artifact 或聊天工具传输。
 - `backups/` 只供备份任务账号写入，不能位于 Nginx 静态目录；生产长期备份应转移到独立加密对象存储。
 - `private-storage` 只通过容器卷或私有 S3 Bucket 访问，不能映射到公开 Web 目录。
+
+### OpenCloudOS 9 轻量应用服务器
+
+腾讯云轻量应用服务器使用 OpenCloudOS 9 时采用 `dnf`，不能照抄下方 Ubuntu 的 `apt-get` 命令。先确认系统和架构，再安装 OpenCloudOS 软件源中的 Moby、Compose v2、Nginx 和 firewalld：
+
+```bash
+cat /etc/os-release
+uname -m
+free -h
+df -h /
+
+sudo dnf makecache
+sudo dnf install -y moby docker-compose-plugin git curl ca-certificates nginx firewalld
+sudo systemctl enable --now docker
+sudo systemctl enable --now firewalld
+
+docker --version
+docker compose version
+git --version
+nginx -v
+systemctl is-active docker
+docker run --rm hello-world
+```
+
+OpenCloudOS 的容器说明见 [OpenCloudOS 容器用户指南](https://docs.opencloudos.org/OCS/Virtualization_and_Containers_Guide/Docker_guide/)。如果 Docker Hub 在中国大陆网络超时，可在确认 `/etc/docker/daemon.json` 没有需要保留的配置后，按腾讯云控制台提供的镜像加速地址配置 Registry Mirror；修改后必须先执行 `dockerd --validate --config-file=/etc/docker/daemon.json`，通过后才重启 Docker。不要从不可信网站复制镜像地址。
+
+4GB 内存的单机只适合合成账号预发布验收。应配置 Swap、磁盘/内存/容器重启告警，并持续观察 ClamAV、PostgreSQL、Redis、API、Worker 和 Web 同时运行时的资源余量；未完成容量压测前不能按正式生产容量承诺。
 
 ### Ubuntu CVM 安装 Docker Engine 与 Compose plugin
 
@@ -53,7 +80,7 @@ docker compose version
 sudo docker run --rm hello-world
 ```
 
-Docker 发布端口可能绕过 UFW 规则，不能只依据 `ufw status` 判断端口安全；必须同时复核腾讯云安全组、Docker 发布配置和宿主机 `DOCKER-USER` 链（按实际 iptables/nftables 实现检查），并确认没有把数据库、Redis、API、Worker 或 Web 端口暴露到公网。
+Docker 发布端口可能绕过部分宿主机防火墙规则，不能只依据 `ufw status` 或 `firewall-cmd --list-all` 判断端口安全；必须同时复核腾讯云安全组/轻量实例防火墙、Docker 发布配置和实际 iptables/nftables 规则，并从外部网络实测端口，确认没有把数据库、Redis、API、Worker 或 Web 端口暴露到公网。
 
 ## 3. Secret 与环境变量契约
 
@@ -61,8 +88,15 @@ Docker 发布端口可能绕过 UFW 规则，不能只依据 `ufw status` 判断
 
 ```bash
 cp .env.example .env
+# Linux 必须把示例值替换为当前非 root 运维账号的主组 GID。
+secret_gid="$(id -g)"
+sed -i "s/^APP_RUNTIME_GID=.*/APP_RUNTIME_GID=${secret_gid}/" .env
+chmod 700 .secrets
+chmod 640 .secrets/*
 docker compose config
 ```
+
+用 `docker compose config` 复核 `migrate`、`api`、`ai-worker` 的 `group_add` 等于上述 GID。若 Secret 已在外部 Secret Manager 中按容器 UID/GID 安全投递，应以该平台的权限模型为准，不能为绕过报错扩大成全局可读。
 
 生产优先使用 Docker Secret/KMS/Secret Manager 注入以下文件名：
 
@@ -123,7 +157,7 @@ AUTH_COOKIE_SECURE=true
 
 ## 6. 腾讯云安全组与网络边界
 
-安全组上线前人工核对为；控制台入口与规则语义以[腾讯云 CVM 安全组官方文档](https://cloud.tencent.com/document/product/213)为准，本文没有代替运维创建或修改任何云资源：
+CVM 使用安全组，轻量应用服务器使用实例“防火墙”。上线前按实际产品人工核对；规则语义分别以[腾讯云 CVM 安全组官方文档](https://cloud.tencent.com/document/product/213)和[轻量应用服务器防火墙官方文档](https://cloud.tencent.com/document/product/1207/44577)为准。轻量实例的来源留空会按所有 IPv4 地址处理，SSH 规则必须明确填写固定管理 IP/CIDR：
 
 | 端口 | 公网策略 | 用途 |
 | --- | --- | --- |
@@ -134,7 +168,7 @@ AUTH_COOKIE_SECURE=true
 | TCP 8888、8889、6866 | 禁止公网 | API、Worker、Web 只在容器网络 |
 | TCP 8080 | 禁止公网 | Compose 入口只绑定宿主机回环地址 |
 
-同时检查 CVM 本机防火墙、Docker 发布端口、云负载均衡监听器和 IPv6 规则；任何一层暴露 5432/6379/8888/8889/6866/8080 都视为上线阻塞项。
+同时检查宿主机防火墙、Docker 发布端口、云负载均衡监听器和 IPv6 规则；任何一层暴露 5432/6379/8888/8889/6866/8080 都视为上线阻塞项。
 
 ## 7. 日志、监控与告警
 

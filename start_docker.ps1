@@ -35,6 +35,11 @@ function Ensure-LocalSecrets {
             Write-Host "已生成本机 Secret：$name"
         }
     }
+    $aiApiKeyPath = Join-Path $SecretDirectory "ai_api_key"
+    if (-not (Test-Path -LiteralPath $aiApiKeyPath)) {
+        New-Item -ItemType File -Path $aiApiKeyPath | Out-Null
+        Write-Host "已创建空的本机 Secret：ai_api_key（未配置 AI 时保持为空）"
+    }
 }
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
