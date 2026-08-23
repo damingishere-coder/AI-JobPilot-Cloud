@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_URL="http://localhost:8080"
 SECRET_DIR="$ROOT/.secrets"
-APP_SECRET_GID="$(id -g)"
-export APP_SECRET_GID
+APP_RUNTIME_GID="$(id -g)"
+export APP_RUNTIME_GID
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "错误：没有找到 docker 命令。请先安装并启动 Docker Desktop。" >&2

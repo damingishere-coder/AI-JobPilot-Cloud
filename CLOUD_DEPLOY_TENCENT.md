@@ -23,7 +23,7 @@
 - 使用受支持的 Linux 发行版、Docker Engine 和 Compose v2；磁盘容量按 PostgreSQL、私有文件、ClamAV 病毒库、镜像和备份增长预留，并设置磁盘告警。
 - 使用专用非 root 运维账号执行 Compose；Docker socket 属于高权限资源，只授予受控运维组。
 - 项目目录只放代码、Compose、模板和无秘密 `.env.example`；生产 `.env`、`.secrets/`、证书私钥、备份和日志放在独立受限目录。
-- `.secrets/` 目录权限使用 `0700`；Linux Compose 的文件型 Secret 是只读 bind mount，Java 容器又使用独立非 root UID，因此 Secret 文件使用 `0640`，并通过 `APP_SECRET_GID` 仅把运维账号主组补充给需要 Secret 的容器。不要改成 `0644`；证书私钥仍只允许 Nginx 进程/受控运维账号读取。禁止通过 Git、Issue、CI Artifact 或聊天工具传输。
+- `.secrets/` 目录权限使用 `0700`；Linux Compose 的文件型 Secret 是只读 bind mount，Java 容器又使用独立非 root UID，因此 Secret 文件使用 `0640`，并通过 `APP_RUNTIME_GID` 仅把运维账号主组补充给需要 Secret 的容器。不要改成 `0644`；证书私钥仍只允许 Nginx 进程/受控运维账号读取。禁止通过 Git、Issue、CI Artifact 或聊天工具传输。
 - `backups/` 只供备份任务账号写入，不能位于 Nginx 静态目录；生产长期备份应转移到独立加密对象存储。
 - `private-storage` 只通过容器卷或私有 S3 Bucket 访问，不能映射到公开 Web 目录。
 
@@ -63,7 +63,7 @@ Docker 发布端口可能绕过 UFW 规则，不能只依据 `ufw status` 判断
 cp .env.example .env
 # Linux 必须把示例值替换为当前非 root 运维账号的主组 GID。
 secret_gid="$(id -g)"
-sed -i "s/^APP_SECRET_GID=.*/APP_SECRET_GID=${secret_gid}/" .env
+sed -i "s/^APP_RUNTIME_GID=.*/APP_RUNTIME_GID=${secret_gid}/" .env
 chmod 700 .secrets
 chmod 640 .secrets/*
 docker compose config
