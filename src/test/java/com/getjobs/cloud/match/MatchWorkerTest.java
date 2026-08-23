@@ -1,5 +1,8 @@
 package com.getjobs.cloud.match;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.getjobs.cloud.ai.AiMatchClient;
 import com.getjobs.cloud.ai.AiMatchException;
@@ -16,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.StreamOffset;
@@ -85,6 +89,29 @@ class MatchWorkerTest {
 
         worker = new MatchWorker(matchRepo, encryption, aiClient, tenants,
                 transactionManager, redis, new ObjectMapper(), audit, quotas, properties);
+    }
+
+    @Test
+    void redisConsumerLogDoesNotExposeExceptionMessage() {
+        String sensitiveMessage = "redis://example.invalid/resume-content?marker=SENSITIVE_EXCEPTION_TEXT";
+        Logger logger = (Logger) LoggerFactory.getLogger(MatchWorker.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try {
+            when(redis.opsForStream()).thenThrow(new RuntimeException(sensitiveMessage));
+
+            worker.consumeFromRedis();
+
+            assertThat(appender.list)
+                    .extracting(ILoggingEvent::getFormattedMessage)
+                    .anyMatch(message -> message.contains("异常类型=RuntimeException"))
+                    .allMatch(message -> !message.contains(sensitiveMessage));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     // ---- Decision tests (thresholds) ----

@@ -113,7 +113,7 @@ public class MatchWorker {
                 processStreamMessage(message);
             }
         } catch (RuntimeException exception) {
-            log.warn("Redis Stream 消费异常，将重试，原因={}", exception.getMessage());
+            log.warn("Redis Stream 消费异常，将重试，异常类型={}", exception.getClass().getSimpleName());
         }
     }
 
