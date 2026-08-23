@@ -36,7 +36,7 @@ WORKDIR /workspace/front
 ENV NEXT_TELEMETRY_DISABLED=1 \
     CLOUD_LOGIN_REQUIRED=true
 RUN corepack enable && corepack prepare pnpm@10.20.0 --activate
-COPY front/package.json front/pnpm-lock.yaml ./
+COPY front/package.json front/pnpm-lock.yaml front/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY front/ ./
 RUN pnpm build && test -d out
