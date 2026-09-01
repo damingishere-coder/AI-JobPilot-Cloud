@@ -4,7 +4,7 @@ import org.springframework.boot.gradle.tasks.run.BootRun
 
 plugins {
     java
-    id("org.springframework.boot") version "3.5.7"
+    id("org.springframework.boot") version "3.5.16"
     // 使用 BOM(platform) 管理版本，不需要 dependency-management 插件
     // id("io.spring.dependency-management") version "1.1.6"
 }
@@ -23,7 +23,7 @@ repositories {
 
 dependencies {
     // 用 Spring Boot 官方 BOM 管理版本（推荐）
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.7"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.16"))
 
     // 受 BOM 管理的依赖（不写版本）
     implementation("org.springframework.boot:spring-boot-starter-web")
@@ -38,30 +38,30 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("io.micrometer:micrometer-registry-prometheus")
-    implementation(platform("software.amazon.awssdk:bom:2.31.77"))
+    implementation(platform("software.amazon.awssdk:bom:2.54.1"))
     implementation("software.amazon.awssdk:s3")
 
     // 不在 BOM 中的依赖（写版本）
-    implementation("com.microsoft.playwright:playwright:1.51.0")
-    implementation("com.baomidou:mybatis-plus-spring-boot3-starter:3.5.9")
-    implementation("org.xerial:sqlite-jdbc:3.45.1.0")
+    implementation("com.microsoft.playwright:playwright:1.62.0")
+    implementation("com.baomidou:mybatis-plus-spring-boot3-starter:3.5.17")
+    implementation("org.xerial:sqlite-jdbc:3.53.2.1")
     runtimeOnly("org.postgresql:postgresql")
     // 代码生成器（MyBatis-Plus Generator + Freemarker 模板）
-    implementation("com.baomidou:mybatis-plus-generator:3.5.9")
-    implementation("org.freemarker:freemarker:2.3.32")
+    implementation("com.baomidou:mybatis-plus-generator:3.5.17")
+    implementation("org.freemarker:freemarker:2.3.34")
     implementation("org.json:json:20231013")
-    implementation("io.github.cdimascio:dotenv-java:2.2.0")
+    implementation("io.github.cdimascio:dotenv-java:2.3.2")
     implementation("jakarta.annotation:jakarta.annotation-api:2.1.1")
-    implementation("org.apache.pdfbox:pdfbox:3.0.3")
-    implementation("org.apache.poi:poi-ooxml:5.4.1")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
-    developmentOnly("org.springframework.boot:spring-boot-devtools:3.5.7")
+    implementation("org.apache.pdfbox:pdfbox:3.0.8")
+    implementation("org.apache.poi:poi-ooxml:5.5.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.85.2")
+    developmentOnly("org.springframework.boot:spring-boot-devtools:3.5.16")
 
     // Lombok（仅 Java 项目需要）
-    compileOnly("org.projectlombok:lombok:1.18.42")
-    annotationProcessor("org.projectlombok:lombok:1.18.42")
-    testCompileOnly("org.projectlombok:lombok:1.18.42")
-    testAnnotationProcessor("org.projectlombok:lombok:1.18.42")
+    compileOnly("org.projectlombok:lombok:1.18.46")
+    annotationProcessor("org.projectlombok:lombok:1.18.46")
+    testCompileOnly("org.projectlombok:lombok:1.18.46")
+    testAnnotationProcessor("org.projectlombok:lombok:1.18.46")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
