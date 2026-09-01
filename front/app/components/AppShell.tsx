@@ -6,7 +6,17 @@ import Sidebar from "./Sidebar"
 import ContentArea from "./ContentArea"
 import { useAuth } from "./AuthProvider"
 
-const publicRoutes = new Set(["/login", "/register", "/terms", "/privacy"])
+const publicRoutes = new Set([
+  "/login",
+  "/register",
+  "/terms",
+  "/privacy",
+  "/ai-disclosure",
+  "/forgot-password",
+  "/reset-password",
+  "/resend-verification",
+  "/verify-email",
+])
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()

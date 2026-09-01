@@ -36,9 +36,10 @@ describe("登录和注册表单", () => {
   it("注册时阻止两次密码不一致", async () => {
     render(<RegisterPage />)
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "person@example.com" } })
+    fireEvent.change(screen.getByLabelText("邀请码"), { target: { value: "BETA-TEST" } })
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "StrongPassword!2026" } })
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "AnotherPassword!2026" } })
-    fireEvent.click(screen.getByRole("checkbox"))
+    screen.getAllByRole("checkbox").forEach((checkbox) => fireEvent.click(checkbox))
     fireEvent.click(screen.getByRole("button", { name: "注册并登录" }))
 
     expect(await screen.findByRole("alert")).toHaveTextContent("两次输入的密码不一致")
@@ -46,18 +47,40 @@ describe("登录和注册表单", () => {
   })
 
   it("注册提交邮箱、密码和条款确认并进入工作台", async () => {
-    mocks.register.mockResolvedValue(undefined)
+    mocks.register.mockResolvedValue({ verificationRequired: false })
     render(<RegisterPage />)
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "person@example.com" } })
+    fireEvent.change(screen.getByLabelText("邀请码"), { target: { value: "BETA-TEST" } })
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "StrongPassword!2026" } })
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "StrongPassword!2026" } })
-    fireEvent.click(screen.getByRole("checkbox"))
+    screen.getAllByRole("checkbox").forEach((checkbox) => fireEvent.click(checkbox))
     fireEvent.click(screen.getByRole("button", { name: "注册并登录" }))
 
     await waitFor(() => {
-      expect(mocks.register).toHaveBeenCalledWith("person@example.com", "StrongPassword!2026", true)
+      expect(mocks.register).toHaveBeenCalledWith(
+        "person@example.com",
+        "StrongPassword!2026",
+        "BETA-TEST",
+        true,
+        true,
+        true,
+      )
       expect(mocks.replace).toHaveBeenCalledWith("/")
     })
+  })
+
+  it("注册需要验证邮箱时不建立前端登录态", async () => {
+    mocks.register.mockResolvedValue({ verificationRequired: true, emailMasked: "pe***@example.com" })
+    render(<RegisterPage />)
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "person@example.com" } })
+    fireEvent.change(screen.getByLabelText("邀请码"), { target: { value: "BETA-TEST" } })
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "StrongPassword!2026" } })
+    fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "StrongPassword!2026" } })
+    screen.getAllByRole("checkbox").forEach((checkbox) => fireEvent.click(checkbox))
+    fireEvent.click(screen.getByRole("button", { name: "注册并登录" }))
+
+    expect(await screen.findByText(/注册已受理/)).toBeInTheDocument()
+    expect(mocks.replace).not.toHaveBeenCalledWith("/")
   })
 
   it("登录展示稳定错误信息并拒绝外部 next 跳转", async () => {
