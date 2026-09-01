@@ -20,6 +20,21 @@ public class AuthProperties {
     @NotBlank
     private String termsVersion = "2026-08-draft";
     @NotBlank
+    private String privacyVersion = "2026-08-draft";
+    @NotBlank
+    private String aiDisclosureVersion = "2026-08-draft";
+    private boolean legalDocumentsFinalized;
+    private boolean inviteRequired;
+    private boolean emailVerificationRequired;
+    @Positive
+    private int betaMaxUsers = 10;
+    @NotNull
+    private Duration emailVerificationTtl = Duration.ofHours(24);
+    @NotNull
+    private Duration passwordResetTtl = Duration.ofMinutes(30);
+    @NotBlank
+    private String publicBaseUrl = "http://localhost:8080";
+    @NotBlank
     private String cookieName = "AJP_SESSION";
     private boolean secureCookie;
     @NotNull
@@ -49,6 +64,24 @@ public class AuthProperties {
     public void setHashPepper(String hashPepper) { this.hashPepper = hashPepper; }
     public String getTermsVersion() { return termsVersion; }
     public void setTermsVersion(String termsVersion) { this.termsVersion = termsVersion; }
+    public String getPrivacyVersion() { return privacyVersion; }
+    public void setPrivacyVersion(String privacyVersion) { this.privacyVersion = privacyVersion; }
+    public String getAiDisclosureVersion() { return aiDisclosureVersion; }
+    public void setAiDisclosureVersion(String aiDisclosureVersion) { this.aiDisclosureVersion = aiDisclosureVersion; }
+    public boolean isLegalDocumentsFinalized() { return legalDocumentsFinalized; }
+    public void setLegalDocumentsFinalized(boolean legalDocumentsFinalized) { this.legalDocumentsFinalized = legalDocumentsFinalized; }
+    public boolean isInviteRequired() { return inviteRequired; }
+    public void setInviteRequired(boolean inviteRequired) { this.inviteRequired = inviteRequired; }
+    public boolean isEmailVerificationRequired() { return emailVerificationRequired; }
+    public void setEmailVerificationRequired(boolean emailVerificationRequired) { this.emailVerificationRequired = emailVerificationRequired; }
+    public int getBetaMaxUsers() { return betaMaxUsers; }
+    public void setBetaMaxUsers(int betaMaxUsers) { this.betaMaxUsers = betaMaxUsers; }
+    public Duration getEmailVerificationTtl() { return emailVerificationTtl; }
+    public void setEmailVerificationTtl(Duration emailVerificationTtl) { this.emailVerificationTtl = emailVerificationTtl; }
+    public Duration getPasswordResetTtl() { return passwordResetTtl; }
+    public void setPasswordResetTtl(Duration passwordResetTtl) { this.passwordResetTtl = passwordResetTtl; }
+    public String getPublicBaseUrl() { return publicBaseUrl; }
+    public void setPublicBaseUrl(String publicBaseUrl) { this.publicBaseUrl = publicBaseUrl; }
     public String getCookieName() { return cookieName; }
     public void setCookieName(String cookieName) { this.cookieName = cookieName; }
     public boolean isSecureCookie() { return secureCookie; }

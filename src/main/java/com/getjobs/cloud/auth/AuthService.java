@@ -4,6 +4,8 @@ import com.getjobs.cloud.quota.QuotaService;
 import com.getjobs.cloud.web.ApiException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.context.annotation.Profile;
@@ -19,9 +21,13 @@ import java.util.UUID;
 @Service
 @Profile("api")
 public class AuthService {
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
     private static final int LOCK_THRESHOLD = 5;
 
     private final UserRepository users;
+    private final AuthFlowRepository flows;
+    private final OneTimeTokenSupport tokens;
+    private final AccountEmailSender emailSender;
     private final PasswordEncoder passwordEncoder;
     private final PasswordPolicy passwordPolicy;
     private final AuthRateLimiter rateLimiter;
@@ -35,6 +41,9 @@ public class AuthService {
 
     public AuthService(
             UserRepository users,
+            AuthFlowRepository flows,
+            OneTimeTokenSupport tokens,
+            AccountEmailSender emailSender,
             PasswordEncoder passwordEncoder,
             PasswordPolicy passwordPolicy,
             AuthRateLimiter rateLimiter,
@@ -46,6 +55,9 @@ public class AuthService {
             Clock clock
     ) {
         this.users = users;
+        this.flows = flows;
+        this.tokens = tokens;
+        this.emailSender = emailSender;
         this.passwordEncoder = passwordEncoder;
         this.passwordPolicy = passwordPolicy;
         this.rateLimiter = rateLimiter;
@@ -59,30 +71,70 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResult register(
+    public RegistrationOutcome register(
             String rawEmail,
             String password,
+            String inviteCode,
             boolean acceptTerms,
+            boolean acceptPrivacy,
+            boolean acceptAiDisclosure,
             RequestMetadata request
     ) {
         String email = EmailAddressSupport.normalize(rawEmail);
         rateLimiter.checkRegister(request.remoteAddress(), email);
         if (!acceptTerms) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TERMS_NOT_ACCEPTED", "请先同意服务条款和隐私说明");
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TERMS_NOT_ACCEPTED", "请先同意服务条款");
+        }
+        if (properties.isLegalDocumentsFinalized() && (!acceptPrivacy || !acceptAiDisclosure)) {
+            throw new ApiException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "CONSENT_NOT_ACCEPTED",
+                    "请分别同意隐私政策和第三方 AI 数据处理说明"
+            );
         }
         passwordPolicy.validate(password, email);
-        if (users.findByEmail(email).isPresent()) {
+        if (!properties.isInviteRequired() && users.findByEmail(email).isPresent()) {
             throw new ApiException(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED", "该邮箱已经注册");
         }
 
         try {
-            UUID userId = users.insertUser(email, passwordEncoder.encode(password));
+            UUID userId = UUID.randomUUID();
+            if (properties.isInviteRequired()) {
+                if (inviteCode == null || inviteCode.isBlank()) {
+                    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVITE_REQUIRED", "请输入有效邀请码");
+                }
+                String inviteOutcome = flows.consumeInvite(
+                        tokens.hash(inviteCode.trim()), userId, email, properties.getBetaMaxUsers()
+                );
+                if ("LIMIT_REACHED".equals(inviteOutcome)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "BETA_LIMIT_REACHED", "测试名额已满");
+                }
+                if (!"OK".equals(inviteOutcome)) {
+                    throw registrationUnavailable();
+                }
+            }
+            UserStatus initialStatus = properties.isEmailVerificationRequired()
+                    ? UserStatus.PENDING
+                    : UserStatus.ACTIVE;
+            users.insertUser(userId, email, passwordEncoder.encode(password), initialStatus);
             // 同一注册事务与同一用户 tenant context：默认资料与 FREE 额度初始化
             // 任一失败都会整体回滚，绝不出现“有账号无额度”的半完成状态。
             userTransactions.execute(userId, () -> {
                 users.insertDefaultProfile(userId);
                 quotaService.initializeFree(userId);
             });
+            flows.recordConsent(userId, "TERMS", properties.getTermsVersion());
+            if (acceptPrivacy) {
+                flows.recordConsent(userId, "PRIVACY", properties.getPrivacyVersion());
+            }
+            if (acceptAiDisclosure) {
+                flows.recordConsent(userId, "AI_DISCLOSURE", properties.getAiDisclosureVersion());
+            }
+
+            PendingEmail pendingEmail = null;
+            if (properties.isEmailVerificationRequired()) {
+                pendingEmail = createEmailToken(userId, email, "VERIFY_EMAIL", properties.getEmailVerificationTtl());
+            }
             UserAccount account = users.findById(userId).orElseThrow();
             auditLogs.append(
                     userId,
@@ -90,11 +142,93 @@ public class AuthService {
                     "AUTH_REGISTER",
                     "SUCCESS",
                     request,
-                    Map.of("termsVersion", properties.getTermsVersion())
+                    Map.of(
+                            "termsVersion", properties.getTermsVersion(),
+                            "privacyVersion", acceptPrivacy ? properties.getPrivacyVersion() : "NOT_ACCEPTED",
+                            "aiDisclosureVersion", acceptAiDisclosure ? properties.getAiDisclosureVersion() : "NOT_ACCEPTED"
+                    )
             );
-            return result(account);
+            return new RegistrationOutcome(result(account), properties.isEmailVerificationRequired(), pendingEmail);
         } catch (DuplicateKeyException exception) {
+            if (properties.isInviteRequired()) {
+                throw registrationUnavailable();
+            }
             throw new ApiException(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED", "该邮箱已经注册");
+        }
+    }
+
+    @Transactional
+    public Optional<PendingEmail> requestEmailVerification(String rawEmail, RequestMetadata request) {
+        String email = EmailAddressSupport.normalize(rawEmail);
+        rateLimiter.checkEmailAction(request.remoteAddress(), email);
+        Optional<UserAccount> account = users.findByEmail(email);
+        if (account.isEmpty() || account.get().status() != UserStatus.PENDING) {
+            return Optional.empty();
+        }
+        PendingEmail action = createEmailToken(
+                account.get().id(), email, "VERIFY_EMAIL", properties.getEmailVerificationTtl()
+        );
+        auditLogs.append(account.get().id(), account.get().role(), "AUTH_EMAIL_VERIFICATION_SENT", "SUCCESS", request, Map.of());
+        return Optional.of(action);
+    }
+
+    @Transactional
+    public void verifyEmail(String rawToken, RequestMetadata request) {
+        rateLimiter.checkEmailToken(request.remoteAddress());
+        AuthFlowRepository.EmailToken token = flows.consumeEmailToken(tokens.hash(rawToken), "VERIFY_EMAIL")
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TOKEN_INVALID", "验证链接无效或已过期"));
+        users.markEmailVerified(token.userId(), clock.instant());
+        UserAccount account = users.findById(token.userId())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TOKEN_INVALID", "验证链接无效或已过期"));
+        auditLogs.append(account.id(), account.role(), "AUTH_EMAIL_VERIFIED", "SUCCESS", request, Map.of());
+    }
+
+    @Transactional
+    public Optional<PendingEmail> requestPasswordReset(String rawEmail, RequestMetadata request) {
+        String email = EmailAddressSupport.normalize(rawEmail);
+        rateLimiter.checkEmailAction(request.remoteAddress(), email);
+        Optional<UserAccount> account = users.findByEmail(email)
+                .filter(candidate -> candidate.status() == UserStatus.ACTIVE || candidate.status() == UserStatus.LOCKED);
+        if (account.isEmpty()) {
+            return Optional.empty();
+        }
+        PendingEmail action = createEmailToken(
+                account.get().id(), email, "RESET_PASSWORD", properties.getPasswordResetTtl()
+        );
+        auditLogs.append(account.get().id(), account.get().role(), "AUTH_PASSWORD_RESET_REQUESTED", "SUCCESS", request, Map.of());
+        return Optional.of(action);
+    }
+
+    @Transactional
+    public void resetPassword(String rawToken, String newPassword, RequestMetadata request) {
+        rateLimiter.checkEmailToken(request.remoteAddress());
+        AuthFlowRepository.EmailToken token = flows.consumeEmailToken(tokens.hash(rawToken), "RESET_PASSWORD")
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TOKEN_INVALID", "重置链接无效或已过期"));
+        passwordPolicy.validate(newPassword, token.email());
+        UserAccount account = users.findById(token.userId())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TOKEN_INVALID", "重置链接无效或已过期"));
+        users.updatePassword(account.id(), passwordEncoder.encode(newPassword));
+        sessionRevocation.revokeAll(account.id());
+        auditLogs.append(account.id(), account.role(), "AUTH_PASSWORD_RESET_COMPLETED", "SUCCESS", request, Map.of());
+    }
+
+    public void sendVerification(PendingEmail email) {
+        if (email != null) {
+            try {
+                emailSender.sendVerification(email.recipient(), email.rawToken());
+            } catch (EmailDeliveryException exception) {
+                log.warn("邮箱验证邮件发送失败，异常类型={}", exception.getClass().getSimpleName());
+            }
+        }
+    }
+
+    public void sendPasswordReset(PendingEmail email) {
+        if (email != null) {
+            try {
+                emailSender.sendPasswordReset(email.recipient(), email.rawToken());
+            } catch (EmailDeliveryException exception) {
+                log.warn("密码重置邮件发送失败，异常类型={}", exception.getClass().getSimpleName());
+            }
         }
     }
 
@@ -125,7 +259,7 @@ public class AuthService {
         }
         if (account != null && account.status() == UserStatus.PENDING) {
             auditLogs.append(null, null, "AUTH_LOGIN_PENDING", "DENIED", request, Map.of("reason", "ACCOUNT_PENDING"));
-            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_DISABLED", "账号尚未启用");
+            throw new ApiException(HttpStatus.FORBIDDEN, "EMAIL_NOT_VERIFIED", "请先完成邮箱验证");
         }
 
         String storedHash = account == null ? dummyPasswordHash : account.passwordHash();
@@ -196,6 +330,26 @@ public class AuthService {
         );
     }
 
+    private ApiException registrationUnavailable() {
+        return new ApiException(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "REGISTRATION_UNAVAILABLE",
+                "无法完成注册，请确认邀请信息或返回登录"
+        );
+    }
+
     public record CurrentUserView(UserAccount account, UserProfile profile) {
+    }
+
+    public record PendingEmail(String recipient, String rawToken) {
+    }
+
+    public record RegistrationOutcome(AuthResult authResult, boolean verificationRequired, PendingEmail pendingEmail) {
+    }
+
+    private PendingEmail createEmailToken(UUID userId, String email, String purpose, Duration ttl) {
+        String rawToken = tokens.generate();
+        flows.createEmailToken(userId, purpose, tokens.hash(rawToken), email, clock.instant().plus(ttl));
+        return new PendingEmail(email, rawToken);
     }
 }

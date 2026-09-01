@@ -38,6 +38,12 @@ public final class AuthApiModels {
     public record LogoutPayload(boolean loggedOut) {
     }
 
+    public record EmailActionPayload(boolean accepted, boolean verificationRequired, String emailMasked) {
+    }
+
+    public record ActionPayload(boolean accepted) {
+    }
+
     public record Profile(String displayName, String city, String timezone, String locale) {
         static Profile from(UserProfile profile) {
             return new Profile(profile.displayName(), profile.city(), profile.timezone(), profile.locale());

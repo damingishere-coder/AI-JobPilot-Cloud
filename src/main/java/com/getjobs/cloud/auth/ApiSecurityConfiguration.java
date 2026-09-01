@@ -120,7 +120,9 @@ public class ApiSecurityConfiguration {
                         .requestMatchers(
                                 "/livez", "/readyz", "/api/health", "/error",
                                 "/actuator/health", "/actuator/health/**",
-                                "/api/auth/csrf", "/api/auth/register", "/api/auth/login", "/api/auth/logout"
+                                "/api/auth/csrf", "/api/auth/register", "/api/auth/login", "/api/auth/logout",
+                                "/api/auth/email-verification/request", "/api/auth/email-verification/confirm",
+                                "/api/auth/password-reset/request", "/api/auth/password-reset/confirm"
                         ).permitAll()
                         .requestMatchers("/api/**").hasAnyRole("USER", "ADMIN")
                         .anyRequest().denyAll()

@@ -9,9 +9,9 @@ app:
   ai-match:
     enabled: true
     api-key: ${ai_api_key:${AI_API_KEY:}}
-    provider: openai
-    model: ${AI_MODEL:gpt-4.1-mini}
-    base-url: ${AI_BASE_URL:https://api.openai.com/v1}
+    provider: deepseek
+    model: ${AI_MODEL:deepseek-v4-flash}
+    base-url: ${AI_BASE_URL:https://api.deepseek.com}
     prompt-version: v1
     stream-poll-delay: 2s
     outbox-poll-delay: 10s

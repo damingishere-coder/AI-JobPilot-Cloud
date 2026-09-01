@@ -37,9 +37,9 @@ app:
     allow-ephemeral-key: false
   ai-match:
     enabled: false
-    provider: openai
-    model: ${AI_MODEL:gpt-4.1-mini}
-    base-url: ${AI_BASE_URL:https://api.openai.com/v1}
+    provider: deepseek
+    model: ${AI_MODEL:deepseek-v4-flash}
+    base-url: ${AI_BASE_URL:https://api.deepseek.com}
     prompt-version: v1
     # api-key: intentionally absent from API profile — only Worker needs it
     timeout:
