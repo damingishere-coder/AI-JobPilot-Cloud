@@ -26,10 +26,12 @@ for name in db_owner_password db_app_password redis_password auth_hash_pepper da
     echo "已生成本机 Secret：$name"
   fi
 done
-if [[ ! -e "$SECRET_DIR/ai_api_key" ]]; then
-  : > "$SECRET_DIR/ai_api_key"
-  echo "已创建空的本机 Secret：ai_api_key（未配置 AI 时保持为空）"
-fi
+for name in ai_api_key tencentcloud_ses_secret_id tencentcloud_ses_secret_key; do
+  if [[ ! -e "$SECRET_DIR/$name" ]]; then
+    : > "$SECRET_DIR/$name"
+    echo "已创建空的本机 Secret：$name（未启用对应服务时保持为空）"
+  fi
+done
 chmod 640 "$SECRET_DIR"/*
 
 cd "$ROOT"

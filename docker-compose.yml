@@ -110,8 +110,27 @@ services:
       SPRING_PROFILES_ACTIVE: cloud,api,prod
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
       REDIS_HOST: redis
+      LIMITED_BETA_ENABLED: ${LIMITED_BETA_ENABLED:-false}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_TERMS_VERSION: ${AUTH_TERMS_VERSION:-2026-08-draft}
+      AUTH_PRIVACY_VERSION: ${AUTH_PRIVACY_VERSION:-2026-08-draft}
+      AUTH_AI_DISCLOSURE_VERSION: ${AUTH_AI_DISCLOSURE_VERSION:-2026-08-draft}
+      AUTH_LEGAL_DOCUMENTS_FINALIZED: ${AUTH_LEGAL_DOCUMENTS_FINALIZED:-false}
+      AUTH_INVITE_REQUIRED: ${AUTH_INVITE_REQUIRED:-false}
+      AUTH_EMAIL_VERIFICATION_REQUIRED: ${AUTH_EMAIL_VERIFICATION_REQUIRED:-false}
+      BETA_MAX_USERS: ${BETA_MAX_USERS:-10}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      AUTH_EMAIL_PROVIDER: ${AUTH_EMAIL_PROVIDER:-disabled}
+      TENCENT_SES_REGION: ${TENCENT_SES_REGION:-ap-guangzhou}
+      TENCENT_SES_FROM_ADDRESS: ${TENCENT_SES_FROM_ADDRESS:-noreply@toudiniuma.cn}
+      TENCENT_SES_VERIFICATION_TEMPLATE_ID: ${TENCENT_SES_VERIFICATION_TEMPLATE_ID:-0}
+      TENCENT_SES_PASSWORD_RESET_TEMPLATE_ID: ${TENCENT_SES_PASSWORD_RESET_TEMPLATE_ID:-0}
+      APP_DISPLAY_NAME: ${APP_DISPLAY_NAME:-投递牛马}
+      ACCOUNT_DELETION_WORKER_ENABLED: ${ACCOUNT_DELETION_WORKER_ENABLED:-true}
+      ACCOUNT_DELETION_POLL_DELAY: ${ACCOUNT_DELETION_POLL_DELAY:-60s}
+      ACCOUNT_DELETION_LEASE_SECONDS: ${ACCOUNT_DELETION_LEASE_SECONDS:-600}
+      ACCOUNT_DELETION_MAX_ATTEMPTS: ${ACCOUNT_DELETION_MAX_ATTEMPTS:-1440}
+      ACCOUNT_DELETION_BACKUP_RETENTION: ${ACCOUNT_DELETION_BACKUP_RETENTION:-180d}
       # 插件绑定与投递执行的运行参数（非敏感），默认值与 application-api.yaml 一致；
       # Token、绑定码与固定秘密绝不通过环境变量注入。
       PLUGIN_BIND_CODE_TTL: ${PLUGIN_BIND_CODE_TTL:-5m}
@@ -123,6 +142,7 @@ services:
       PLUGIN_ALLOWED_EXTENSION_ORIGINS: ${PLUGIN_ALLOWED_EXTENSION_ORIGINS:-chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc}
       DELIVERY_LEASE_SECONDS: ${DELIVERY_LEASE_SECONDS:-600}
       DELIVERY_MAX_ATTEMPTS: ${DELIVERY_MAX_ATTEMPTS:-3}
+      DELIVERY_EXECUTION_ENABLED: ${DELIVERY_EXECUTION_ENABLED:-false}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
       DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-2}
       APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-local}
@@ -144,6 +164,8 @@ services:
       - redis_password
       - auth_hash_pepper
       - data_encryption_key
+      - tencentcloud_ses_secret_id
+      - tencentcloud_ses_secret_key
     volumes:
       - private-storage:/var/lib/ai-jobpilot/private
     networks:
@@ -181,8 +203,8 @@ services:
       SPRING_PROFILES_ACTIVE: cloud,worker,prod
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ai_jobpilot}?connectTimeout=3&socketTimeout=3&tcpKeepAlive=true
       REDIS_HOST: redis
-      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
-      AI_MODEL: ${AI_MODEL:-gpt-4.1-mini}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com}
+      AI_MODEL: ${AI_MODEL:-deepseek-v4-flash}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
       DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-2}
       APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-local}
@@ -290,6 +312,10 @@ secrets:
     file: ./.secrets/data_encryption_key
   ai_api_key:
     file: ./.secrets/ai_api_key
+  tencentcloud_ses_secret_id:
+    file: ./.secrets/tencentcloud_ses_secret_id
+  tencentcloud_ses_secret_key:
+    file: ./.secrets/tencentcloud_ses_secret_key
 
 volumes:
   postgres-data:

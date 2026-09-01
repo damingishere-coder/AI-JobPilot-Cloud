@@ -42,7 +42,10 @@ const forbiddenExtensions = [
 ];
 
 const forbiddenFileNames = new Set(["config.yaml", "cookie.json", "data.json"]);
-const nonSecretExampleKeys = new Set(["AUTH_COOKIE_SECURE"]);
+const nonSecretExampleKeys = new Set([
+  "AUTH_COOKIE_SECURE",
+  "TENCENT_SES_PASSWORD_RESET_TEMPLATE_ID",
+]);
 const migrationRoot = "src/main/resources/db";
 const migrationPrefix = "src/main/resources/db/migration/";
 const migrationDirectories = new Set([

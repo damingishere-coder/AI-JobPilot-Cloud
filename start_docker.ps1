@@ -35,10 +35,12 @@ function Ensure-LocalSecrets {
             Write-Host "已生成本机 Secret：$name"
         }
     }
-    $aiApiKeyPath = Join-Path $SecretDirectory "ai_api_key"
-    if (-not (Test-Path -LiteralPath $aiApiKeyPath)) {
-        New-Item -ItemType File -Path $aiApiKeyPath | Out-Null
-        Write-Host "已创建空的本机 Secret：ai_api_key（未配置 AI 时保持为空）"
+    foreach ($name in @("ai_api_key", "tencentcloud_ses_secret_id", "tencentcloud_ses_secret_key")) {
+        $optionalSecretPath = Join-Path $SecretDirectory $name
+        if (-not (Test-Path -LiteralPath $optionalSecretPath)) {
+            New-Item -ItemType File -Path $optionalSecretPath | Out-Null
+            Write-Host "已创建空的本机 Secret：$name（未启用对应服务时保持为空）"
+        }
     }
 }
 
