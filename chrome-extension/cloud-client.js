@@ -18,8 +18,9 @@
 
   const EXTENSION_ORIGIN = "chrome-extension://ompipmnadogogfbebnmjgbbcadildpbc";
 
-  /** 预设的本地 Cloud API 入口；popup 可从列表选择或输入自定义地址。 */
-  const LOCAL_API_BASE_PRESETS = Object.freeze([
+  /** 预设的 Cloud API 入口；popup 可从列表选择或输入自定义地址。 */
+  const APPROVED_API_BASE_PRESETS = Object.freeze([
+    "https://toudiniuma.cn",
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     "http://localhost:8888",
@@ -33,6 +34,7 @@
 
   /** 允许发送 CLOUD_DELIVERY_WAKE 的网页精确 Origin。 */
   const ALLOWED_WAKE_PAGE_ORIGINS = Object.freeze([
+    "https://toudiniuma.cn",
     "http://localhost:6866",
     "http://127.0.0.1:6866",
     "http://localhost:8080",
@@ -420,11 +422,12 @@
     if (host === "localhost" || host === "127.0.0.1") {
       if (parsed.protocol !== "http:") return null;
       if (!port) return null;
-      return `http://${host}:${port}`;
+      const localOrigin = `http://${host}:${port}`;
+      return APPROVED_API_BASE_PRESETS.includes(localOrigin) ? localOrigin : null;
     }
     if (parsed.protocol !== "https:") return null;
-    if (port === "443") return `https://${host}`;
-    return port ? `https://${host}:${port}` : `https://${host}`;
+    const remoteOrigin = port === "443" ? `https://${host}` : (port ? `https://${host}:${port}` : `https://${host}`);
+    return remoteOrigin === "https://toudiniuma.cn" ? remoteOrigin : null;
   }
 
   function isAllowedApiBase(value) {
@@ -432,11 +435,11 @@
   }
 
   function defaultApiBase() {
-    return LOCAL_API_BASE_PRESETS[0];
+    return APPROVED_API_BASE_PRESETS[0];
   }
 
   function allowedApiBases() {
-    return LOCAL_API_BASE_PRESETS.slice();
+    return APPROVED_API_BASE_PRESETS.slice();
   }
 
   /** 是否为本地开发入口（http://localhost|127.0.0.1:port）。 */
@@ -1076,7 +1079,7 @@
   globalThis.GetJobsCloudClient = Object.freeze({
     // 常量
     EXTENSION_ORIGIN,
-    ALLOWED_API_BASES: LOCAL_API_BASE_PRESETS,
+    ALLOWED_API_BASES: APPROVED_API_BASE_PRESETS,
     CUSTOM_API_BASE_VALUE,
     ALLOWED_WAKE_PAGE_ORIGINS,
     STORAGE_KEYS,

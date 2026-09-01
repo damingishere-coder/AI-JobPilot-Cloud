@@ -54,10 +54,10 @@ function functionBody(source, functionName) {
 
 // ---------------------------------------------------------------- 1. manifest
 
-test("manifest is MV3 1.5.0 with a fixed public key deriving the expected extension ID", () => {
+test("manifest is MV3 1.6.0 with a fixed public key deriving the expected extension ID", () => {
   const manifest = JSON.parse(read("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.5.0");
+  assert.equal(manifest.version, "1.6.0");
   assert.ok(manifest.key && manifest.key.length > 100, "manifest.key 必须存在且为固定公钥");
   assert.equal(deriveExtensionId(manifest.key), EXTENSION_ID);
   assert.equal(manifest.action?.default_popup, "popup.html");
@@ -74,22 +74,15 @@ test("manifest permissions stay minimal and host permissions match the approved 
   const joined = JSON.stringify(hostPermissions);
   assert.ok(!joined.includes("<all_urls>"), "host_permissions 不得包含 <all_urls>");
   assert.ok(!joined.includes("https://*/*"), "静态 host_permissions 不得包含 https://*/*");
-  for (const host of ["http://localhost:6866/*", "http://127.0.0.1:6866/*", "http://localhost:8080/*", "http://127.0.0.1:8080/*", "http://127.0.0.1:8888/*", "http://localhost:8888/*"]) {
+  for (const host of ["https://toudiniuma.cn/*", "https://www.zhipin.com/*", "https://*.zhipin.com/*"]) {
     assert.ok(hostPermissions.includes(host), `host_permissions 需要 ${host}`);
   }
-  // 动态/可选模式只声明在 optional_host_permissions：远程仅 https://*/*（绝无
-  // <all_urls>），本地仅 localhost/127.0.0.1。运行时按需请求精确 `${origin}/*`。
-  const optional = manifest.optional_host_permissions || [];
-  assert.ok(optional.includes("https://*/*"), "optional_host_permissions 需要 https://*/*");
-  assert.ok(optional.includes("http://localhost/*"), "optional_host_permissions 需要 http://localhost/*");
-  assert.ok(optional.includes("http://127.0.0.1/*"), "optional_host_permissions 需要 http://127.0.0.1/*");
-  assert.ok(!optional.includes("<all_urls>"), "optional_host_permissions 不得包含 <all_urls>");
-  assert.ok(!optional.includes("http://*/*"), "optional_host_permissions 不得放行远程 http");
+  assert.ok(!hostPermissions.some((host) => host.includes("localhost") || host.includes("127.0.0.1")), "发布包不得申请本地服务权限");
+  assert.ok(!hostPermissions.some((host) => host.includes("zhaopin.com")), "首期不得静态申请智联权限");
+  assert.deepEqual(manifest.optional_host_permissions || [], [], "首期不声明宽泛可选权限");
   const bridgeScript = manifest.content_scripts.find((entry) => entry.js?.includes("page-bridge.js"));
   assert.ok(bridgeScript, "page-bridge content script 存在");
-  for (const match of bridgeScript.matches) {
-    assert.ok(/^http:\/\/(localhost|127\.0\.0\.1):(6866|8080)\/\*$/.test(match), `bridge match 越界：${match}`);
-  }
+  assert.deepEqual(bridgeScript.matches, ["https://toudiniuma.cn/*"], "发布包页面桥接只允许正式域名");
   for (const file of ["popup.html", "popup.js", "popup.css", "cloud-client.js"]) {
     assert.ok(fs.existsSync(path.join(EXTENSION_DIR, file)), `缺少文件 ${file}`);
   }
@@ -142,6 +135,23 @@ test("page bridge accepts wake from the approved 8080 origin", () => {
   assert.equal(bridge.runtimeMessages.length, 1);
   assert.equal(bridge.runtimeMessages[0].type, "CLOUD_DELIVERY_WAKE");
   assert.deepEqual(Object.keys(bridge.runtimeMessages[0]).sort(), ["requestId", "source", "taskId", "type"]);
+});
+
+test("page bridge accepts wake from the production domain", () => {
+  const bridge = loadPageBridge("https://toudiniuma.cn");
+  const valid = {
+    source: "GET_JOBS_PAGE",
+    type: "CLOUD_DELIVERY_WAKE",
+    taskId: TEST_TASK_ID,
+    requestId: "req-production"
+  };
+  bridge.dispatchWindowMessage({
+    origin: "https://toudiniuma.cn",
+    source: bridge.context.window,
+    data: valid
+  });
+  assert.equal(bridge.runtimeMessages.length, 1);
+  assert.equal(bridge.runtimeMessages[0].type, "CLOUD_DELIVERY_WAKE");
 });
 
 test("page bridge rejects malformed cloud wakes before the extension backend is called", () => {
@@ -472,10 +482,10 @@ test("popup bind sends the exact bind contract and stores the token only in stor
   assert.equal(bindBody.bindCode, "AB12C-DEF34");
   assert.equal(bindBody.deviceName, "我的 Chrome");
   assert.match(bindBody.installationId, /^[A-Za-z0-9_-]{16,128}$/);
-  assert.equal(bindBody.extensionVersion, "1.5.0");
+  assert.equal(bindBody.extensionVersion, "1.6.0");
   assert.equal(bindBody.browserName, "Chrome");
   assert.equal(bindBody.browserVersion, "120");
-  assert.deepEqual(bindBody.capabilities, ["BOSS", "ZHILIAN"]);
+  assert.deepEqual(bindBody.capabilities, ["BOSS"]);
   assert.ok(!Object.prototype.hasOwnProperty.call(bindBody, "userId"), "不得携带 userId");
   assert.ok(!Object.prototype.hasOwnProperty.call(bindBody, "token"), "请求不得携带 token");
 
@@ -502,9 +512,10 @@ test("popup bind failure never persists a token", async () => {
 test("popup renders preset API bases plus a custom option and never writes outside storage.local", () => {
   const popup = loadPopup();
   const select = popup.elements.get("api-base-select");
-  assert.ok(select.children.length === 7, `应只有 6 个预设入口 + 1 个自定义选项，实际 ${select.children.length}`);
+  assert.ok(select.children.length === 8, `应只有 7 个预设入口 + 1 个自定义选项，实际 ${select.children.length}`);
   const values = select.children.map((option) => option.value);
   assert.deepEqual(values, [
+    "https://toudiniuma.cn",
     "http://localhost:8080", "http://127.0.0.1:8080",
     "http://localhost:8888", "http://127.0.0.1:8888",
     "http://localhost:6866", "http://127.0.0.1:6866",
@@ -658,18 +669,19 @@ test("apiBase normalization accepts only valid https origins and localhost ports
   const Cloud = popup.context.GetJobsCloudClient;
   const normalize = Cloud.normalizeApiBase;
   // 远程 https 合法 origin：标准端口 443 归一化省略，非标准端口保留。
-  assert.equal(normalize("https://api.example.com"), "https://api.example.com");
-  assert.equal(normalize(" https://api.example.com "), "https://api.example.com");
-  assert.equal(normalize("https://api.example.com:443"), "https://api.example.com");
-  assert.equal(normalize("https://api.example.com:8443"), "https://api.example.com:8443");
-  assert.equal(normalize("HTTPS://API.EXAMPLE.COM"), "https://api.example.com");
+  assert.equal(normalize("https://toudiniuma.cn"), "https://toudiniuma.cn");
+  assert.equal(normalize(" https://toudiniuma.cn "), "https://toudiniuma.cn");
+  assert.equal(normalize("https://toudiniuma.cn:443"), "https://toudiniuma.cn");
   // 本地：仅 http://localhost|127.0.0.1，且必须带明确端口。
   assert.equal(normalize("http://localhost:8080"), "http://localhost:8080");
   assert.equal(normalize("http://127.0.0.1:8888"), "http://127.0.0.1:8888");
-  assert.equal(normalize("http://localhost:9999"), "http://localhost:9999");
+  assert.equal(normalize("http://localhost:9999"), null);
   // 拒绝：远程 http、userinfo、path/query/fragment、本地缺端口、本地 https、空白/反斜杠。
   for (const bad of [
     "http://api.example.com",
+    "https://api.example.com",
+    "https://www.toudiniuma.cn",
+    "https://toudiniuma.cn:8443",
     "https://user@api.example.com/",
     "https://api.example.com/path",
     "https://api.example.com?x=1",
@@ -684,16 +696,18 @@ test("apiBase normalization accepts only valid https origins and localhost ports
     assert.equal(normalize(bad), null, `必须拒绝：${bad}`);
   }
   assert.equal(Cloud.isLocalApiBase("http://localhost:8080"), true);
-  assert.equal(Cloud.isLocalApiBase("https://api.example.com"), false);
+  assert.equal(Cloud.isLocalApiBase("https://toudiniuma.cn"), false);
   assert.equal(Cloud.isAllowedApiBase("http://localhost:8080"), true);
-  assert.equal(Cloud.isAllowedApiBase("https://api.example.com"), true);
+  assert.equal(Cloud.isAllowedApiBase("https://toudiniuma.cn"), true);
+  assert.equal(Cloud.isAllowedApiBase("https://api.example.com"), false);
   assert.equal(Cloud.isAllowedApiBase("http://api.example.com"), false);
 });
 
-test("popup bind to a custom https origin requests the exact origin permission and normalizes the base", async () => {
+test("popup binds only to the approved production https origin", async () => {
   let bindBody = null;
   let bindUrl = null;
   const popup = loadPopup({
+    permissionGranted: true,
     fetchImpl: async (call) => {
       if (call.url.endsWith("/api/plugin/bind")) {
         bindUrl = call.url;
@@ -707,21 +721,19 @@ test("popup bind to a custom https origin requests the exact origin permission a
     }
   });
   const Cloud = popup.context.GetJobsCloudClient;
-  popup.elements.get("api-base-select").value = Cloud.CUSTOM_API_BASE_VALUE;
-  popup.elements.get("api-base-input").value = "https://api.example.com:8443/";
+  popup.elements.get("api-base-select").value = "https://toudiniuma.cn";
   popup.elements.get("bind-code-input").value = "ab12c-def34";
   popup.elements.get("device-name-input").value = "我的 Chrome";
   await popup.elements.get("bind-button").listeners.click();
 
   assert.ok(bindBody, "绑定请求必须发出");
-  assert.equal(bindUrl, "https://api.example.com:8443/api/plugin/bind");
-  // 只请求精确 `${origin}/*`，绝不请求通配或其它地址。
-  assert.deepEqual(popup.permissionRequests, [{ origins: ["https://api.example.com:8443/*"] }]);
-  assert.equal(popup.storage["__GET_JOBS_CLOUD_BOUND__"].apiBase, "https://api.example.com:8443");
+  assert.equal(bindUrl, "https://toudiniuma.cn/api/plugin/bind");
+  assert.deepEqual(popup.permissionRequests, [], "静态批准的正式域名不应再请求宽泛可选权限");
+  assert.equal(popup.storage["__GET_JOBS_CLOUD_BOUND__"].apiBase, "https://toudiniuma.cn");
   assert.ok(!popup.elements.get("message").textContent.includes(TOKEN_SENTINEL));
 });
 
-test("popup bind fails closed when the host permission is denied and never stores a token", async () => {
+test("popup rejects an unapproved remote origin before permissions and network", async () => {
   let bindAttempts = 0;
   const popup = loadPopup({
     permissionDenied: true,
@@ -745,8 +757,8 @@ test("popup bind fails closed when the host permission is denied and never store
 
   assert.equal(bindAttempts, 0, "权限被拒不得发出绑定请求");
   assert.equal(popup.storage["__GET_JOBS_CLOUD_BOUND__"], undefined, "权限被拒不得保存 Token");
-  assert.deepEqual(popup.permissionRequests, [{ origins: ["https://api.example.com/*"] }]);
-  assert.ok(popup.elements.get("message").textContent.includes("授权"));
+  assert.deepEqual(popup.permissionRequests, []);
+  assert.ok(popup.elements.get("message").textContent.includes("无效"));
 });
 
 test("popup bind rejects invalid custom origins before any permission or network request", async () => {

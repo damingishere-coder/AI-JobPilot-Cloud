@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "投递牛马 Cloud Bridge",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "AI-JobPilot-Cloud 浏览器执行器：绑定云端设备、执行用户确认后的投递任务。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnj7WXotagjs0IttGKz8MBT1DdKgyRbkeUWr2H13eGymMqD4/E5Waai0iqjHHFJAhCkAQjY0rAJmrAZ0rYSwZQp4wnmnWLIqF/5EiREO6jcPUkuqaTbWjizv6nyaiyvbUgpCCOdcrWlzm6WPLTKhbFg6nLcjeRSQj/E5oWiDJrqLSXcb46jKmqCo5BYou/j2TLxze6HuYz17tSgoGrkkhEgDmaq+ttDi6qKowbDUj3hlCOUQKmeR67mY2aLdK1FxGqNf1HzbxDb0Npc6S7LIOpfGfP9W6c8JXEOnR2AM6eyZ5t+rJ2rORxTaPGsw/WmUMDWUy76nQrlXIJi+zx1KFLQIDAQAB",
   "icons": {
@@ -15,21 +15,9 @@
   },
   "permissions": ["tabs", "scripting", "storage"],
   "host_permissions": [
-    "http://localhost:6866/*",
-    "http://127.0.0.1:6866/*",
-    "http://localhost:8080/*",
-    "http://127.0.0.1:8080/*",
-    "http://localhost:8888/*",
-    "http://127.0.0.1:8888/*",
+    "https://toudiniuma.cn/*",
     "https://www.zhipin.com/*",
-    "https://*.zhipin.com/*",
-    "https://www.zhaopin.com/*",
-    "https://*.zhaopin.com/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://*.zhipin.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -37,10 +25,7 @@
   "content_scripts": [
     {
       "matches": [
-        "http://localhost:6866/*",
-        "http://127.0.0.1:6866/*",
-        "http://localhost:8080/*",
-        "http://127.0.0.1:8080/*"
+        "https://toudiniuma.cn/*"
       ],
       "js": ["page-bridge.js"],
       "run_at": "document_start"
@@ -56,11 +41,6 @@
         "boss-detail-collector.js",
         "boss-content.js"
       ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://www.zhaopin.com/*", "https://*.zhaopin.com/*"],
-      "js": ["zhilian-scan-support.js", "zhilian-content.js"],
       "run_at": "document_idle"
     }
   ]

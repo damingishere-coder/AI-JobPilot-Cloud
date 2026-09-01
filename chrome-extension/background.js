@@ -47,6 +47,7 @@ const LOCAL_API_BASE_URLS = ["http://localhost:6866", "http://127.0.0.1:6866", "
 const BOSS_LOCAL_API_MAX_ATTEMPTS = 3;
 const BOSS_LOCAL_API_TIMEOUT_MS = 30000;
 const ALLOWED_PAGE_ORIGINS = new Set([
+  "https://toudiniuma.cn",
   "http://localhost:6866",
   "http://127.0.0.1:6866",
   "http://localhost:8080",
@@ -652,6 +653,9 @@ async function handlePageMessage(message, sender) {
   const platform = message.platform || inferPlatform(message.type);
   if (!platform || !PLATFORM_CONFIG[platform]) {
     return { success: false, message: "未知平台" };
+  }
+  if (platform !== "boss") {
+    return { success: false, message: "小范围测试首期仅支持BOSS直聘" };
   }
 
   if (platform === "zhilian" && message.type === "ZHILIAN_SCAN_START" && !normalizeZhilianKeywordList(readZhilianKeywordInput(message)).length) {
@@ -2091,6 +2095,10 @@ async function handleCloudApiFailure(taskId, pageTabId, bound, result, execution
 async function executeCloudContentDelivery(taskId, pageTabId, bound, execution) {
   const Cloud = cloudClient();
   const platform = execution.task.platform;
+  if (platform !== "BOSS") {
+    await finishCloudRun(taskId, pageTabId, bound, execution, "PAGE_STRUCTURE_CHANGED");
+    return "failed";
+  }
   const config = PLATFORM_CONFIG[platform === "ZHILIAN" ? "zhilian" : "boss"];
 
   // 暂停可能发生在导航前：绝不新开/导航标签页。
