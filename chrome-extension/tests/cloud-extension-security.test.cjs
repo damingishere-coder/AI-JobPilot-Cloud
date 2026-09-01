@@ -78,7 +78,10 @@ test("manifest permissions stay minimal and host permissions match the approved 
     assert.ok(hostPermissions.includes(host), `host_permissions 需要 ${host}`);
   }
   assert.ok(!hostPermissions.some((host) => host.includes("localhost") || host.includes("127.0.0.1")), "发布包不得申请本地服务权限");
-  assert.ok(!hostPermissions.some((host) => host.includes("zhaopin.com")), "首期不得静态申请智联权限");
+  assert.ok(!hostPermissions.some((permission) => {
+    const hostname = new URL(permission.replace("://*.", "://wildcard.")).hostname;
+    return hostname === "zhaopin.com" || hostname.endsWith(".zhaopin.com");
+  }), "首期不得静态申请智联权限");
   assert.deepEqual(manifest.optional_host_permissions || [], [], "首期不声明宽泛可选权限");
   const bridgeScript = manifest.content_scripts.find((entry) => entry.js?.includes("page-bridge.js"));
   assert.ok(bridgeScript, "page-bridge content script 存在");
