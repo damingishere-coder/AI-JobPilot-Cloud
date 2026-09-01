@@ -339,26 +339,26 @@ public class OpenAiMatchClient implements AiMatchClient {
     private String buildUserPrompt(MatchRequest request) {
         StringBuilder sb = new StringBuilder();
         sb.append("## 岗位信息\n");
-        sb.append("**岗位名称**：").append(request.jobTitle()).append("\n");
-        sb.append("**公司名称**：").append(request.companyName()).append("\n");
+        sb.append("**岗位名称**：").append(sanitizeForPrompt(request.jobTitle())).append("\n");
+        sb.append("**公司名称**：").append(sanitizeForPrompt(request.companyName())).append("\n");
         if (request.jobDescription() != null && !request.jobDescription().isBlank()) {
             String desc = request.jobDescription();
             if (desc.length() > 8000) {
                 desc = desc.substring(0, 8000);
             }
-            sb.append("**岗位描述**：\n").append(desc).append("\n");
+            sb.append("**岗位描述**：\n").append(sanitizeForPrompt(desc)).append("\n");
         }
         if (request.targetTitles() != null && !request.targetTitles().isEmpty()) {
-            sb.append("**目标岗位**：").append(String.join("、", request.targetTitles())).append("\n");
+            sb.append("**目标岗位**：").append(sanitizeItems(request.targetTitles())).append("\n");
         }
         if (request.preferredCompanies() != null && !request.preferredCompanies().isEmpty()) {
-            sb.append("**优先公司**：").append(String.join("、", request.preferredCompanies())).append("\n");
+            sb.append("**优先公司**：").append(sanitizeItems(request.preferredCompanies())).append("\n");
         }
         if (request.excludedCompanies() != null && !request.excludedCompanies().isEmpty()) {
-            sb.append("**排除公司**：").append(String.join("、", request.excludedCompanies())).append("\n");
+            sb.append("**排除公司**：").append(sanitizeItems(request.excludedCompanies())).append("\n");
         }
         if (request.excludedKeywords() != null && !request.excludedKeywords().isEmpty()) {
-            sb.append("**排除关键词**：").append(String.join("、", request.excludedKeywords())).append("\n");
+            sb.append("**排除关键词**：").append(sanitizeItems(request.excludedKeywords())).append("\n");
         }
         sb.append("\n## 求职者简历\n");
         if (request.resumeText() != null && !request.resumeText().isBlank()) {
@@ -378,7 +378,7 @@ public class OpenAiMatchClient implements AiMatchClient {
 
     /**
      * Remove PII from text before sending to the AI model.
-     * Handles phone numbers, ID numbers, and email addresses.
+     * Handles phone numbers, ID numbers, email addresses, and labelled detailed addresses.
      */
     static String sanitizeForPrompt(String text) {
         if (text == null) {
@@ -394,6 +394,16 @@ public class OpenAiMatchClient implements AiMatchClient {
         // Email addresses
         result = result.replaceAll("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
                 "[邮箱已隐藏]");
+        // Labelled residential/contact addresses. Stop at the line boundary so
+        // unrelated resume sections remain useful for matching.
+        result = result.replaceAll(
+                "(?m)(?i)(现居住地|现住址|家庭住址|联系地址|详细地址|住址|address)\\s*[:：]\\s*[^\\r\\n]{4,120}",
+                "$1：[详细住址已隐藏]"
+        );
         return result;
+    }
+
+    private static String sanitizeItems(List<String> items) {
+        return items.stream().map(OpenAiMatchClient::sanitizeForPrompt).collect(java.util.stream.Collectors.joining("、"));
     }
 }

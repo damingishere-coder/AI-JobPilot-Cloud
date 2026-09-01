@@ -85,7 +85,9 @@ jobs:
           pnpm build
 
       - name: Validate Chrome extension
-        run: node scripts/validate-chrome-extension.mjs
+        run: |
+          node --test chrome-extension/tests/*.test.cjs
+          node scripts/validate-chrome-extension.mjs
 
       - name: Build backend JAR with frontend assets
         shell: bash
@@ -109,7 +111,7 @@ jobs:
           fi
 
           cp "$JAR_PATH" "dist/AI-JobPilot-Cloud-${RELEASE_VERSION}.jar"
-          (cd chrome-extension && zip -qr "../dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-chrome-extension.zip" .)
+          (cd chrome-extension && zip -qr "../dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-chrome-extension.zip" . -x "tests/*" "zhilian-*")
           (cd front/out && zip -qr "../../dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-frontend-static.zip" .)
           git archive --format=zip --output="dist/AI-JobPilot-Cloud-${RELEASE_VERSION}-source.zip" HEAD
 

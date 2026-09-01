@@ -62,7 +62,10 @@ export default function LoginPage() {
           </div>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="password">密码</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="password">密码</Label>
+            <Link href="/forgot-password" className="text-xs font-semibold text-blue-600 hover:underline">忘记密码？</Link>
+          </div>
           <div className="relative">
             <BiLockAlt className="pointer-events-none absolute left-3 top-3 text-lg text-slate-400" />
             <Input id="password" type="password" autoComplete="current-password" minLength={12} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} className="pl-10" placeholder="请输入密码" />
@@ -72,6 +75,7 @@ export default function LoginPage() {
           <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-blue-600" />
           记住我 30 天
         </label>
+        <p className="text-right text-xs"><Link href="/resend-verification" className="font-semibold text-blue-600 hover:underline">未收到验证邮件？</Link></p>
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
         <Button type="submit" className="w-full" size="lg" disabled={submitting || loading || !enabled}>
           {submitting && <BiLoaderAlt className="animate-spin" />}

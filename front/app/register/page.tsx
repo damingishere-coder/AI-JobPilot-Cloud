@@ -17,9 +17,13 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [inviteCode, setInviteCode] = useState("")
   const [acceptTerms, setAcceptTerms] = useState(false)
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false)
+  const [acceptAiDisclosure, setAcceptAiDisclosure] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
+  const [verificationEmail, setVerificationEmail] = useState("")
 
   useEffect(() => {
     if (!loading && user) router.replace("/")
@@ -45,8 +49,19 @@ export default function RegisterPage() {
     }
     setSubmitting(true)
     try {
-      await register(email, password, acceptTerms)
-      router.replace("/")
+      const result = await register(
+        email,
+        password,
+        inviteCode,
+        acceptTerms,
+        acceptPrivacy,
+        acceptAiDisclosure,
+      )
+      if (result.verificationRequired) {
+        setVerificationEmail(result.emailMasked || "你的邮箱")
+      } else {
+        router.replace("/")
+      }
     } catch (caught) {
       setError(caught instanceof AuthApiError ? caught.message : "注册失败，请稍后再试")
     } finally {
@@ -57,16 +72,28 @@ export default function RegisterPage() {
   return (
     <AuthPageFrame
       title="创建账号"
-      description="注册后立即进入开发试用版工作台"
+      description="仅限受邀的小范围测试用户"
       footer={<>已经有账号？ <Link href="/login" className="font-semibold text-blue-600 hover:text-blue-700">返回登录</Link></>}
     >
-      <form className="space-y-5" onSubmit={submit}>
+      {verificationEmail ? (
+        <div className="space-y-4 text-sm leading-7 text-slate-600">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-emerald-800">
+            注册已受理。验证邮件已发送至 {verificationEmail}，请在 24 小时内完成验证。
+          </div>
+          <p>如果没有收到邮件，请检查垃圾邮件；重复请求不会泄露账号是否存在。</p>
+          <Link href="/login" className="font-semibold text-blue-600 hover:underline">验证后返回登录</Link>
+        </div>
+      ) : <form className="space-y-5" onSubmit={submit}>
         <div className="space-y-2">
           <Label htmlFor="email">邮箱</Label>
           <div className="relative">
             <BiMailSend className="pointer-events-none absolute left-3 top-3 text-lg text-slate-400" />
             <Input id="email" type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => setEmail(event.target.value)} className="pl-10" placeholder="name@example.com" />
           </div>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="inviteCode">邀请码</Label>
+          <Input id="inviteCode" autoComplete="off" maxLength={64} required value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="请输入测试邀请码" />
         </div>
         <div className="space-y-2">
           <Label htmlFor="password">密码</Label>
@@ -83,14 +110,22 @@ export default function RegisterPage() {
         </div>
         <label className="flex cursor-pointer items-start gap-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
           <input type="checkbox" required checked={acceptTerms} onChange={(event) => setAcceptTerms(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600" />
-          <span>我已阅读并同意 <Link href="/terms" className="text-blue-600 hover:underline">试用版服务条款</Link> 和 <Link href="/privacy" className="text-blue-600 hover:underline">隐私说明</Link></span>
+          <span>我已阅读并同意 <Link href="/terms" className="text-blue-600 hover:underline">用户协议</Link></span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          <input type="checkbox" required checked={acceptPrivacy} onChange={(event) => setAcceptPrivacy(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600" />
+          <span>我已阅读并同意 <Link href="/privacy" className="text-blue-600 hover:underline">隐私政策</Link></span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          <input type="checkbox" required checked={acceptAiDisclosure} onChange={(event) => setAcceptAiDisclosure(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600" />
+          <span>我已阅读并同意 <Link href="/ai-disclosure" className="text-blue-600 hover:underline">第三方 AI 数据处理说明</Link></span>
         </label>
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
         <Button type="submit" className="w-full" size="lg" disabled={submitting || loading || !enabled}>
           {submitting && <BiLoaderAlt className="animate-spin" />}
           {submitting ? "正在创建账号…" : "注册并登录"}
         </Button>
-      </form>
+      </form>}
     </AuthPageFrame>
   )
 }

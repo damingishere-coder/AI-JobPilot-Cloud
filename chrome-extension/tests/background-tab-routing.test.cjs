@@ -163,7 +163,7 @@ test("accepts the actual Zhilian content script version", async () => {
   assert.equal(await context.isContentScriptReady(1, "zhilian-content.js"), true);
 });
 
-test("rejects empty Zhilian keywords before creating or starting a scan", async () => {
+test("limited beta rejects Zhilian before creating or starting a scan", async () => {
   const { context } = loadBackground({ tabs: [] });
 
   const response = await context.handlePageMessage({
@@ -173,7 +173,7 @@ test("rejects empty Zhilian keywords before creating or starting a scan", async 
   }, { tab: { id: 20, url: "http://localhost:6866/zhilian" } });
 
   assert.equal(response.success, false);
-  assert.equal(response.message, "请至少填写一个搜索关键词");
+  assert.equal(response.message, "小范围测试首期仅支持BOSS直聘");
 });
 
 test("injects all Zhilian dependencies when the content script is missing", async () => {

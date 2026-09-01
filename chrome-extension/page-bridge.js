@@ -3,6 +3,7 @@
   const TARGET = "GET_JOBS_EXTENSION";
   const BRIDGE_VERSION = "2026-07-15-boss-api-poc-1";
   const ALLOWED_PAGE_ORIGINS = new Set([
+    "https://toudiniuma.cn",
     "http://localhost:6866",
     "http://127.0.0.1:6866",
     "http://localhost:8080",
@@ -19,11 +20,6 @@
     "BOSS_SCAN_STOP",
     "BOSS_DELIVER_ONE",
     "BOSS_DELIVER_BATCH",
-    "ZHILIAN_SCAN_STATUS",
-    "ZHILIAN_SCAN_START",
-    "ZHILIAN_SCAN_STOP",
-    "ZHILIAN_DELIVER_ONE",
-    "ZHILIAN_DELIVER_BATCH",
     "CLOUD_DELIVERY_WAKE"
   ]);
   const ALLOWED_EXTENSION_MESSAGE_TYPES = new Set([

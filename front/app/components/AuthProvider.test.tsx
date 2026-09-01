@@ -46,11 +46,15 @@ function csrfResponse(token = "csrf-fresh") {
   return apiResponse({ success: true, data: { csrfToken: token }, requestId: "request-csrf" })
 }
 
-function MeAndAction({ action }: { action: "expire" | "csrf" | "logout" }) {
+function MeAndAction({ action }: { action: "expire" | "csrf" | "logout" | "delete" }) {
   const auth = useAuth()
   const run = async () => {
     if (action === "logout") {
       await auth.logout()
+      return
+    }
+    if (action === "delete") {
+      await auth.deleteAccount("StrongPassword!2026", "永久删除")
       return
     }
     await auth.secureRequest("/api/protected", { method: "POST", body: "{}" })
@@ -201,5 +205,47 @@ describe("Cloud 认证上下文与路由守卫", () => {
     expect(await screen.findByText("anonymous")).toBeInTheDocument()
     const logoutInit = fetchMock.mock.calls[2]?.[1] as RequestInit
     expect((logoutInit.headers as Headers).get("X-CSRF-TOKEN")).toBe("csrf-from-me")
+  })
+
+  it("永久删除携带幂等键并立即清理前端登录态", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(csrfResponse("csrf-for-me"))
+      .mockResolvedValueOnce(apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" }))
+      .mockResolvedValueOnce(apiResponse({
+        success: true,
+        data: { requestId: "22222222-2222-2222-2222-222222222222", status: "PENDING" },
+        requestId: "request-delete",
+      }, 202))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<AuthProvider><MeAndAction action="delete" /></AuthProvider>)
+    expect(await screen.findByText("te***@example.com")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "执行" }))
+    expect(await screen.findByText("anonymous")).toBeInTheDocument()
+
+    const deleteInit = fetchMock.mock.calls[2]?.[1] as RequestInit
+    const headers = deleteInit.headers as Headers
+    expect(headers.get("X-CSRF-TOKEN")).toBe("csrf-from-me")
+    expect(headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/)
+    expect(deleteInit.body).toBe(JSON.stringify({ password: "StrongPassword!2026", confirmation: "永久删除" }))
+  })
+
+  it("永久删除重新验证失败时保留当前登录态", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(csrfResponse("csrf-for-me"))
+      .mockResolvedValueOnce(apiResponse({ success: true, data: authenticatedUser, requestId: "request-me" }))
+      .mockResolvedValueOnce(apiResponse({
+        success: false,
+        error: { code: "REAUTHENTICATION_FAILED", message: "当前密码不正确" },
+        requestId: "request-delete-denied",
+      }, 401))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<AuthProvider><MeAndAction action="delete" /></AuthProvider>)
+    expect(await screen.findByText("te***@example.com")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "执行" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(screen.getByText("te***@example.com")).toBeInTheDocument()
+    expect(screen.queryByText("anonymous")).not.toBeInTheDocument()
   })
 })

@@ -52,17 +52,17 @@ class PostgresFlywayIntegrationTest {
     void migratesEmptyPostgresBaselineWithoutLegacyTables() throws Exception {
         Flyway flyway = configuredFlyway();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
 
         try (Connection owner = ownerConnection(); var statement = owner.createStatement()) {
             // V9 只新增 plugin_bind_codes（采集岗位写入 V4 job_posts，不再建独立采集表）；
-            // V11 新增 user_quotas / quota_usage_logs / subscriptions 三张额度表。
+            // V11 新增 3 张额度表；V12 新增邀请、邮件令牌、授权记录和删除任务 5 张表。
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema='app' " +
                             "AND table_name NOT IN ('flyway_schema_history')"
-            ))).isEqualTo(16);
+            ))).isEqualTo(21);
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM pg_extension WHERE extname IN ('citext', 'pgcrypto')"
             ))).isEqualTo(2);
@@ -95,7 +95,9 @@ class PostgresFlywayIntegrationTest {
             // 审计白名单已加入 ADMIN_QUOTA_ADJUSTED。
             assertThat(singleLong(statement.executeQuery(
                     "SELECT count(*) FROM pg_constraint WHERE conname='audit_logs_action_check' " +
-                            "AND pg_get_constraintdef(oid) LIKE '%ADMIN_QUOTA_ADJUSTED%'"
+                            "AND pg_get_constraintdef(oid) LIKE '%ADMIN_QUOTA_ADJUSTED%' " +
+                            "AND pg_get_constraintdef(oid) LIKE '%AUTH_EMAIL_VERIFIED%' " +
+                            "AND pg_get_constraintdef(oid) LIKE '%PLUGIN_JOB_CAPTURED%'"
             ))).isEqualTo(1);
         }
     }
@@ -2455,6 +2457,160 @@ class PostgresFlywayIntegrationTest {
                 ))).isEqualTo(100);
             }
             app.rollback();
+        }
+    }
+
+    @Test
+    @Order(24)
+    void limitedBetaInviteIsSingleUseAndDeletionTombstoneReplaysAfterRestore() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        UUID competingUser = UUID.randomUUID();
+        UUID invite = UUID.randomUUID();
+        UUID request = UUID.randomUUID();
+        String inviteHash = "a".repeat(64);
+        String idempotencyHash = "b".repeat(64);
+        long currentUserCount;
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id,email,password_hash) VALUES ('" + user + "','limited@example.com','$argon2id$test')");
+            stmt.execute("INSERT INTO app.user_profiles(user_id,display_name) VALUES ('" + user + "','待删除用户')");
+            stmt.execute("INSERT INTO app.beta_invites(id,code_hash,expires_at) VALUES ('" + invite + "','" + inviteHash + "',now()+interval '7 days')");
+            currentUserCount = singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.users WHERE role='USER' AND deleted_at IS NULL AND status<>'DELETED'"
+            ));
+            stmt.execute("INSERT INTO app.beta_invites(code_hash,expires_at) VALUES ('" + "c".repeat(64) + "',now()+interval '7 days')");
+        }
+
+        try (Connection app = DriverManager.getConnection(POSTGRES.getJdbcUrl(), APP_USER, APP_PASSWORD);
+             var stmt = app.createStatement()) {
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT app.consume_beta_invite('" + inviteHash + "','" + user + "','limited@example.com',1000)"
+            ))).isEqualTo("OK");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT app.consume_beta_invite('" + inviteHash + "','" + competingUser + "','other@example.com',1000)"
+            ))).isEqualTo("INVITE_INVALID");
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT app.consume_beta_invite('" + "c".repeat(64) + "','" + competingUser +
+                            "','other@example.com'," + currentUserCount + ")"
+            ))).isEqualTo("LIMIT_REACHED");
+
+            var requested = stmt.executeQuery(
+                    "SELECT * FROM app.request_account_deletion('" + user + "','" + request + "','" + idempotencyHash + "')"
+            );
+            assertThat(requested.next()).isTrue();
+            assertThat(requested.getString("deletion_status")).isEqualTo("PENDING");
+            requested.close();
+            var replayed = stmt.executeQuery(
+                    "SELECT * FROM app.request_account_deletion('" + user + "','" + UUID.randomUUID() + "','" + idempotencyHash + "')"
+            );
+            assertThat(replayed.next()).isTrue();
+            assertThat(replayed.getObject("deletion_request_id", UUID.class)).isEqualTo(request);
+            replayed.close();
+
+            var claimed = stmt.executeQuery("SELECT * FROM app.claim_account_deletion(300)");
+            assertThat(claimed.next()).isTrue();
+            assertThat(claimed.getObject("deletion_user_id", UUID.class)).isEqualTo(user);
+            claimed.close();
+            assertThat(singleString(stmt.executeQuery(
+                    "SELECT app.complete_account_deletion('" + request + "',now()+interval '180 days')::text"
+            ))).isEqualTo("true");
+        }
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            assertThat(singleLong(stmt.executeQuery("SELECT count(*) FROM app.users WHERE id='" + user + "'"))).isZero();
+            assertThat(singleLong(stmt.executeQuery("SELECT count(*) FROM app.account_deletion_requests WHERE user_id='" + user + "'"))).isZero();
+            assertThat(singleLong(stmt.executeQuery("SELECT count(*) FROM app.account_deletion_tombstones WHERE account_id='" + user + "'"))).isEqualTo(1);
+            assertThat(singleLong(stmt.executeQuery("SELECT count(*) FROM app.beta_invites WHERE consumed_by='" + user + "'"))).isZero();
+
+            // 模拟旧备份恢复同一 UUID；匿名删除账本回放必须再次清掉账号。
+            stmt.execute("INSERT INTO app.users(id,email,password_hash) VALUES ('" + user + "','restored@example.com','$argon2id$test')");
+            stmt.execute("INSERT INTO app.user_profiles(user_id,display_name) VALUES ('" + user + "','旧备份用户')");
+            stmt.execute("SELECT app.replay_account_deletion('" + user + "','" + request + "',now()-interval '1 day',now()+interval '179 days')");
+            assertThat(singleLong(stmt.executeQuery("SELECT count(*) FROM app.users WHERE id='" + user + "'"))).isZero();
+        }
+    }
+
+    @Test
+    @Order(25)
+    void concurrentInviteConsumptionHasExactlyOneWinner() throws Exception {
+        configuredFlyway().migrate();
+        String inviteHash = "d".repeat(64);
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.beta_invites(code_hash,expires_at) VALUES ('" + inviteHash + "',now()+interval '7 days')");
+        }
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            Future<String> first = executor.submit(() -> consumeInviteAfter(start, ready, inviteHash, UUID.randomUUID()));
+            Future<String> second = executor.submit(() -> consumeInviteAfter(start, ready, inviteHash, UUID.randomUUID()));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(java.util.List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder("OK", "INVITE_INVALID");
+        }
+    }
+
+    private static String consumeInviteAfter(
+            CountDownLatch start,
+            CountDownLatch ready,
+            String inviteHash,
+            UUID userId
+    ) throws Exception {
+        ready.countDown();
+        assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+        try (Connection app = appConnection(); var stmt = app.createStatement()) {
+            return singleString(stmt.executeQuery(
+                    "SELECT app.consume_beta_invite('" + inviteHash + "','" + userId +
+                            "','race@example.com',1000)"
+            ));
+        }
+    }
+
+    @Test
+    @Order(26)
+    void emailTokensAreHashedSingleUseAndExpiryAwareAndConsentsAreVersioned() throws Exception {
+        configuredFlyway().migrate();
+        UUID user = UUID.randomUUID();
+        String validHash = "e".repeat(64);
+        String expiredHash = "f".repeat(64);
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            stmt.execute("INSERT INTO app.users(id,email,password_hash,status) VALUES ('" + user +
+                    "','token-flow@example.com','$argon2id$test','PENDING')");
+            stmt.execute("INSERT INTO app.auth_email_tokens(user_id,purpose,token_hash,email,expires_at) VALUES ('" +
+                    user + "','RESET_PASSWORD','" + expiredHash + "','token-flow@example.com',now()-interval '1 second')");
+        }
+
+        try (Connection app = appConnection(); var stmt = app.createStatement()) {
+            stmt.execute("SELECT app.create_auth_email_token('" + user + "','RESET_PASSWORD','" + validHash +
+                    "','token-flow@example.com',now()+interval '30 minutes')");
+            for (String type : java.util.List.of("TERMS", "PRIVACY", "AI_DISCLOSURE")) {
+                stmt.execute("SELECT app.record_user_consent('" + user + "','" + type + "','2026-09-01')");
+            }
+
+            var first = stmt.executeQuery("SELECT * FROM app.consume_auth_email_token('" + validHash + "','RESET_PASSWORD')");
+            assertThat(first.next()).isTrue();
+            assertThat(first.getObject("token_user_id", UUID.class)).isEqualTo(user);
+            assertThat(first.getString("token_email")).isEqualTo("token-flow@example.com");
+            first.close();
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.consume_auth_email_token('" + validHash + "','RESET_PASSWORD')"
+            ))).isZero();
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.consume_auth_email_token('" + expiredHash + "','RESET_PASSWORD')"
+            ))).isZero();
+        }
+
+        try (Connection owner = ownerConnection(); var stmt = owner.createStatement()) {
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.user_consents WHERE user_id='" + user +
+                            "' AND document_version='2026-09-01'"
+            ))).isEqualTo(3);
+            assertThat(singleLong(stmt.executeQuery(
+                    "SELECT count(*) FROM app.auth_email_tokens WHERE user_id='" + user +
+                            "' AND token_hash IN ('" + validHash + "','" + expiredHash + "')"
+            ))).isEqualTo(2);
         }
     }
 }

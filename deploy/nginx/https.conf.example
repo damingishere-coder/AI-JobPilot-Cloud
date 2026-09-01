@@ -8,21 +8,30 @@ log_format cloud_json escape=json
 
 server {
     listen 80;
-    server_name app.example.com;
-    return 301 https://app.example.com$request_uri;
+    server_name toudiniuma.cn www.toudiniuma.cn;
+    return 301 https://toudiniuma.cn$request_uri;
 }
 
 server {
     listen 443 ssl;
     http2 on;
-    server_name app.example.com;
+    server_name www.toudiniuma.cn;
+    ssl_certificate /etc/letsencrypt/live/toudiniuma.cn/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/toudiniuma.cn/privkey.pem;
+    return 301 https://toudiniuma.cn$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name toudiniuma.cn;
     server_tokens off;
     access_log /dev/stdout cloud_json;
     error_log /dev/stderr crit;
     limit_req_log_level notice;
 
-    ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/toudiniuma.cn/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/toudiniuma.cn/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:TLS:10m;
     ssl_session_timeout 1d;
@@ -30,7 +39,7 @@ server {
 
     client_max_body_size 30m;
     add_header X-Request-ID $request_id always;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # 首次上线先不要启用 HSTS；HTTPS 连续稳定验证后再按上线确认单开启。
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
@@ -53,19 +62,7 @@ server {
 
     location ^~ /actuator/ { return 404; }
 
-    location = /api/auth/login {
-        limit_req zone=auth_limit burst=5 nodelay;
-        error_page 429 = @auth_rate_limited;
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Request-ID $request_id;
-        proxy_hide_header X-Request-ID;
-    }
-
-    location = /api/auth/register {
+    location ~ ^/api/auth/(?:login|register|email-verification/(?:request|confirm)|password-reset/(?:request|confirm))$ {
         limit_req zone=auth_limit burst=5 nodelay;
         error_page 429 = @auth_rate_limited;
         proxy_pass http://127.0.0.1:8080;

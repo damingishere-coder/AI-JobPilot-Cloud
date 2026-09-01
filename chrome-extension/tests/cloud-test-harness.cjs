@@ -414,7 +414,7 @@ function loadPopup(options = {}) {
   };
 
   const chromeMock = {
-    runtime: { getManifest: () => ({ version: "1.5.0" }) },
+    runtime: { getManifest: () => ({ version: "1.6.0" }) },
     storage: {
       local: {
         async get(key) { return { [key]: storage[key] }; },

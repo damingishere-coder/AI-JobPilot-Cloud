@@ -6,7 +6,7 @@ import { AuthApiError, cloudApiRequest } from "@/lib/authApi"
 export type AuthUser = {
   id: string
   emailMasked: string
-  status: "ACTIVE" | "LOCKED" | "DISABLED" | "PENDING"
+  status: "ACTIVE" | "LOCKED" | "DISABLED" | "PENDING" | "DELETION_PENDING" | "DELETED"
   role: "USER" | "ADMIN"
 }
 
@@ -30,12 +30,31 @@ type MePayload = AuthUser & {
   csrfToken: string
 }
 
+export type RegistrationResult = {
+  verificationRequired: boolean
+  emailMasked?: string
+}
+
+type EmailActionPayload = {
+  accepted: boolean
+  verificationRequired: boolean
+  emailMasked: string
+}
+
 type AuthContextValue = {
   enabled: boolean
   loading: boolean
   user: AuthUser | null
   login: (email: string, password: string, rememberMe: boolean) => Promise<void>
-  register: (email: string, password: string, acceptTerms: boolean) => Promise<void>
+  register: (
+    email: string,
+    password: string,
+    inviteCode: string,
+    acceptTerms: boolean,
+    acceptPrivacy: boolean,
+    acceptAiDisclosure: boolean,
+  ) => Promise<RegistrationResult>
+  deleteAccount: (password: string, confirmation: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<AuthUser | null>
   secureRequest: <T>(path: string, init?: RequestInit) => Promise<T>
@@ -113,18 +132,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(data.user)
   }, [fetchCsrf])
 
-  const register = useCallback(async (email: string, password: string, acceptTerms: boolean) => {
+  const register = useCallback(async (
+    email: string,
+    password: string,
+    inviteCode: string,
+    acceptTerms: boolean,
+    acceptPrivacy: boolean,
+    acceptAiDisclosure: boolean,
+  ) => {
     const csrfToken = await fetchCsrf()
-    const data = await cloudApiRequest<AuthPayload>(
+    const data = await cloudApiRequest<AuthPayload | EmailActionPayload>(
       "/api/auth/register",
       {
         method: "POST",
-        body: JSON.stringify({ email, password, acceptTerms }),
+        body: JSON.stringify({
+          email,
+          password,
+          inviteCode,
+          acceptTerms,
+          acceptPrivacy,
+          acceptAiDisclosure,
+        }),
       },
       csrfToken,
     )
+    if ("verificationRequired" in data) {
+      return { verificationRequired: data.verificationRequired, emailMasked: data.emailMasked }
+    }
     csrfRef.current = data.csrfToken
     setUser(data.user)
+    return { verificationRequired: false }
   }, [fetchCsrf])
 
   const secureRequest = useCallback(async <T,>(path: string, init: RequestInit = {}) => {
@@ -150,7 +187,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await fetchCsrf()
           continue
         }
-        if (error instanceof AuthApiError && error.status === 401) {
+        if (
+          error instanceof AuthApiError &&
+          (error.code === "AUTH_REQUIRED" || error.code === "ACCOUNT_DISABLED")
+        ) {
           csrfRef.current = null
           setUser(null)
         }
@@ -168,16 +208,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [secureRequest])
 
+  const deleteAccount = useCallback(async (password: string, confirmation: string) => {
+    await secureRequest("/api/account/deletion", {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ password, confirmation }),
+    })
+    csrfRef.current = null
+    setUser(null)
+  }, [secureRequest])
+
   const value = useMemo<AuthContextValue>(() => ({
     enabled: cloudAuthEnabled,
     loading,
     user,
     login,
     register,
+    deleteAccount,
     logout,
     refresh,
     secureRequest,
-  }), [loading, user, login, register, logout, refresh, secureRequest])
+  }), [loading, user, login, register, deleteAccount, logout, refresh, secureRequest])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

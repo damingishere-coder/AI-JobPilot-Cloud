@@ -40,6 +40,7 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-prometheus")
     implementation(platform("software.amazon.awssdk:bom:2.31.77"))
     implementation("software.amazon.awssdk:s3")
+    implementation("com.tencentcloudapi:tencentcloud-sdk-java-ses:3.1.1273")
 
     // 不在 BOM 中的依赖（写版本）
     implementation("com.microsoft.playwright:playwright:1.51.0")

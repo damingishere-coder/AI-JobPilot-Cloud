@@ -61,16 +61,65 @@ public class AuthController {
     }
 
     @PostMapping("/api/auth/register")
-    public ResponseEntity<ApiResponse<AuthApiModels.AuthPayload>> register(
+    public ResponseEntity<ApiResponse<?>> register(
             @Valid @RequestBody RegisterRequest body,
             HttpServletRequest request,
             HttpServletResponse response
     ) {
-        AuthResult result = authService.register(
-                body.email(), body.password(), body.acceptTerms(), RequestMetadata.from(request)
+        AuthService.RegistrationOutcome outcome = authService.register(
+                body.email(), body.password(), body.inviteCode(),
+                body.acceptTerms(), body.acceptPrivacy(), body.acceptAiDisclosure(),
+                RequestMetadata.from(request)
         );
+        if (outcome.verificationRequired()) {
+            authService.sendVerification(outcome.pendingEmail());
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(
+                    new AuthApiModels.EmailActionPayload(
+                            true, true, EmailAddressSupport.mask(body.email())
+                    )
+            ));
+        }
+        AuthResult result = outcome.authResult();
         SessionAuthManager.SessionState session = sessions.establish(result.principal(), false, request, response);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(authPayload(result, session)));
+    }
+
+    @PostMapping("/api/auth/email-verification/request")
+    public ApiResponse<AuthApiModels.ActionPayload> requestEmailVerification(
+            @Valid @RequestBody EmailAddressRequest body,
+            HttpServletRequest request
+    ) {
+        authService.requestEmailVerification(body.email(), RequestMetadata.from(request))
+                .ifPresent(authService::sendVerification);
+        return ApiResponse.success(new AuthApiModels.ActionPayload(true));
+    }
+
+    @PostMapping("/api/auth/email-verification/confirm")
+    public ApiResponse<AuthApiModels.ActionPayload> confirmEmailVerification(
+            @Valid @RequestBody EmailTokenRequest body,
+            HttpServletRequest request
+    ) {
+        authService.verifyEmail(body.token(), RequestMetadata.from(request));
+        return ApiResponse.success(new AuthApiModels.ActionPayload(true));
+    }
+
+    @PostMapping("/api/auth/password-reset/request")
+    public ApiResponse<AuthApiModels.ActionPayload> requestPasswordReset(
+            @Valid @RequestBody EmailAddressRequest body,
+            HttpServletRequest request
+    ) {
+        authService.requestPasswordReset(body.email(), RequestMetadata.from(request))
+                .ifPresent(authService::sendPasswordReset);
+        return ApiResponse.success(new AuthApiModels.ActionPayload(true));
+    }
+
+    @PostMapping("/api/auth/password-reset/confirm")
+    public ApiResponse<AuthApiModels.ActionPayload> confirmPasswordReset(
+            @Valid @RequestBody PasswordResetConfirmRequest body,
+            HttpServletRequest request
+    ) {
+        authService.resetPassword(body.token(), body.newPassword(), RequestMetadata.from(request));
+        return ApiResponse.success(new AuthApiModels.ActionPayload(true));
     }
 
     @PostMapping("/api/auth/login")

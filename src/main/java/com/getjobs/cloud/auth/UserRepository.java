@@ -49,12 +49,13 @@ public class UserRepository {
         }
     }
 
-    public UUID insertUser(String email, String passwordHash) {
-        return jdbc.queryForObject(
-                "INSERT INTO app.users(email, password_hash) VALUES (?, ?) RETURNING id",
-                UUID.class,
+    public void insertUser(UUID userId, String email, String passwordHash, UserStatus status) {
+        jdbc.update(
+                "INSERT INTO app.users(id, email, password_hash, status) VALUES (?, ?, ?, ?)",
+                userId,
                 email,
-                passwordHash
+                passwordHash,
+                status.name()
         );
     }
 
@@ -124,6 +125,29 @@ public class UserRepository {
         jdbc.update(
                 "UPDATE app.users SET status = 'ACTIVE', locked_until = NULL WHERE id = ? AND status = 'LOCKED'",
                 userId
+        );
+    }
+
+    public void markEmailVerified(UUID userId, Instant verifiedAt) {
+        jdbc.update(
+                """
+                UPDATE app.users
+                SET status='ACTIVE', email_verified_at=?, failed_login_count=0, locked_until=NULL
+                WHERE id=? AND status='PENDING' AND deleted_at IS NULL
+                """,
+                Timestamp.from(verifiedAt), userId
+        );
+    }
+
+    public void updatePassword(UUID userId, String passwordHash) {
+        jdbc.update(
+                """
+                UPDATE app.users
+                SET password_hash=?, failed_login_count=0, locked_until=NULL,
+                    status=CASE WHEN status='LOCKED' THEN 'ACTIVE' ELSE status END
+                WHERE id=? AND deleted_at IS NULL
+                """,
+                passwordHash, userId
         );
     }
 

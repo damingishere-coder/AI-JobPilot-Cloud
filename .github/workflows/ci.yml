@@ -142,7 +142,9 @@ jobs:
           node-version: "20"
 
       - name: Validate manifest and referenced files
-        run: node scripts/validate-chrome-extension.mjs
+        run: |
+          node --test chrome-extension/tests/*.test.cjs
+          node scripts/validate-chrome-extension.mjs
 
   docker-config:
     name: Docker Configuration
@@ -161,6 +163,8 @@ jobs:
           printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
           openssl rand -hex 32 > .secrets/data_encryption_key
           : > .secrets/ai_api_key
+          : > .secrets/tencentcloud_ses_secret_id
+          : > .secrets/tencentcloud_ses_secret_key
           docker compose config --quiet
 
       - name: Verify required Dockerfile stages
@@ -191,12 +195,12 @@ jobs:
           openssl req -x509 -nodes -newkey rsa:2048 \
             -keyout /tmp/ai-jobpilot-nginx-tls/privkey.pem \
             -out /tmp/ai-jobpilot-nginx-tls/fullchain.pem \
-            -days 1 -subj '/CN=app.example.com'
+            -days 1 -subj '/CN=toudiniuma.cn'
           docker run --rm \
             --add-host api:127.0.0.1 \
             --add-host web:127.0.0.1 \
             -v "$PWD/deploy/nginx/https.conf.example:/etc/nginx/conf.d/default.conf:ro" \
-            -v "/tmp/ai-jobpilot-nginx-tls:/etc/letsencrypt/live/app.example.com:ro" \
+            -v "/tmp/ai-jobpilot-nginx-tls:/etc/letsencrypt/live/toudiniuma.cn:ro" \
             nginx:stable-alpine nginx -t
 
   cloud-compose:
@@ -216,6 +220,8 @@ jobs:
           printf 'ci-auth-hash-pepper-at-least-32-bytes' > .secrets/auth_hash_pepper
           openssl rand -hex 32 > .secrets/data_encryption_key
           : > .secrets/ai_api_key
+          : > .secrets/tencentcloud_ses_secret_id
+          : > .secrets/tencentcloud_ses_secret_key
 
       - name: Build and start Cloud stack
         run: docker compose up -d --build --wait --wait-timeout 600

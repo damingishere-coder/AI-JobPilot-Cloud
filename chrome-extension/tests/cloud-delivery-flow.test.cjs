@@ -447,7 +447,7 @@ test("an untrusted job URL from the start response is rejected before any naviga
   }), "不得导航到恶意 URL");
 });
 
-test("Zhilian cloud task never receives a greeting and navigation re-checks the detail path", async () => {
+test("limited beta rejects a Zhilian cloud task without navigation or content messages", async () => {
   const h = loadCloudBackground({
     bound: boundState(),
     contentResult: { success: false, failureType: "PAGE_STRUCTURE_CHANGED" },
@@ -462,11 +462,10 @@ test("Zhilian cloud task never receives a greeting and navigation re-checks the 
   assert.ok(done);
 
   const deliverMessage = h.sentMessages.find((entry) => entry.message.cloudManaged);
-  assert.ok(deliverMessage, "智联 content 消息存在");
-  assert.equal(deliverMessage.message.task.url, ZHILIAN_JOB_URL);
-  assert.ok(!Object.prototype.hasOwnProperty.call(deliverMessage.message.task, "greeting"), "智联不得接收 greeting");
+  assert.equal(deliverMessage, undefined, "首期不得向智联 content script 发送任务");
+  assert.ok(!h.tabList.some((tab) => tab.url === ZHILIAN_JOB_URL), "首期不得导航到智联岗位页");
   const body = JSON.parse(fetchByPattern(h.fetchCalls, /\/fail$/)[0].options.body);
-  assert.equal(body.errorCode, "PAGE_STRUCTURE_CHANGED", "智联无法确认时 fail");
+  assert.equal(body.errorCode, "PAGE_STRUCTURE_CHANGED", "越界平台任务必须失败关闭");
 });
 
 // ---------------------------------------------------------------- 敏感信息扫描

@@ -58,6 +58,12 @@ const navGroups: NavGroup[] = [
       { href: '/plugin', icon: BiExtension, label: '浏览器插件', color: 'text-violet-500' },
     ],
   },
+  {
+    title: '账号',
+    items: [
+      { href: '/settings/account', icon: BiShieldAlt, label: '账号与隐私', color: 'text-slate-500' },
+    ],
+  },
 ]
 
 export default function Sidebar() {

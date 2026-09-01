@@ -19,6 +19,8 @@ spring:
 
 app:
   role: api
+  launch:
+    limited-beta-enabled: ${LIMITED_BETA_ENABLED:false}
   clamav:
     enabled: ${CLAMAV_ENABLED:true}
     host: ${CLAMAV_HOST:127.0.0.1}
@@ -28,6 +30,16 @@ app:
   auth:
     hash-pepper: ${auth_hash_pepper:${AUTH_HASH_PEPPER:}}
     terms-version: ${AUTH_TERMS_VERSION:2026-08-draft}
+    privacy-version: ${AUTH_PRIVACY_VERSION:2026-08-draft}
+    ai-disclosure-version: ${AUTH_AI_DISCLOSURE_VERSION:2026-08-draft}
+    # 三份律师终稿到位前保持 false；生产上线不得绕过此门禁。
+    legal-documents-finalized: ${AUTH_LEGAL_DOCUMENTS_FINALIZED:false}
+    invite-required: ${AUTH_INVITE_REQUIRED:false}
+    email-verification-required: ${AUTH_EMAIL_VERIFICATION_REQUIRED:false}
+    beta-max-users: ${BETA_MAX_USERS:10}
+    email-verification-ttl: ${AUTH_EMAIL_VERIFICATION_TTL:24h}
+    password-reset-ttl: ${AUTH_PASSWORD_RESET_TTL:30m}
+    public-base-url: ${APP_PUBLIC_URL:http://localhost:8080}
     cookie-name: AJP_SESSION
     secure-cookie: ${AUTH_COOKIE_SECURE:false}
     normal-session-timeout: 12h
@@ -41,6 +53,21 @@ app:
     register-ip-window: 1h
     csrf-ip-limit: 30
     csrf-ip-window: 1m
+    email:
+      provider: ${AUTH_EMAIL_PROVIDER:disabled}
+      region: ${TENCENT_SES_REGION:ap-guangzhou}
+      from-address: ${TENCENT_SES_FROM_ADDRESS:noreply@toudiniuma.cn}
+      secret-id: ${tencentcloud_ses_secret_id:}
+      secret-key: ${tencentcloud_ses_secret_key:}
+      verification-template-id: ${TENCENT_SES_VERIFICATION_TEMPLATE_ID:0}
+      password-reset-template-id: ${TENCENT_SES_PASSWORD_RESET_TEMPLATE_ID:0}
+      application-name: ${APP_DISPLAY_NAME:投递牛马}
+  account-deletion:
+    worker-enabled: ${ACCOUNT_DELETION_WORKER_ENABLED:true}
+    poll-delay: ${ACCOUNT_DELETION_POLL_DELAY:60s}
+    lease-seconds: ${ACCOUNT_DELETION_LEASE_SECONDS:600}
+    max-attempts: ${ACCOUNT_DELETION_MAX_ATTEMPTS:1440}
+    backup-retention: ${ACCOUNT_DELETION_BACKUP_RETENTION:180d}
   plugin:
     bind-code-ttl: ${PLUGIN_BIND_CODE_TTL:5m}
     max-active-bind-codes: ${PLUGIN_MAX_ACTIVE_BIND_CODES:3}

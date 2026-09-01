@@ -48,6 +48,15 @@ public class AuthRateLimiter {
         check("csrf:ip:" + fingerprints.hash(remoteAddress), properties.getCsrfIpLimit(), properties.getCsrfIpWindow());
     }
 
+    public void checkEmailAction(String remoteAddress, String normalizedEmail) {
+        check("email-action:ip:" + fingerprints.hash(remoteAddress), 10, Duration.ofHours(1));
+        check("email-action:email:" + fingerprints.hash(normalizedEmail), 3, Duration.ofHours(1));
+    }
+
+    public void checkEmailToken(String remoteAddress) {
+        check("email-token:ip:" + fingerprints.hash(remoteAddress), 20, Duration.ofHours(1));
+    }
+
     private void check(String suffix, int limit, Duration window) {
         long current;
         try {

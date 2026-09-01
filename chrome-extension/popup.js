@@ -195,8 +195,8 @@
         deviceName,
         browserName: browser.name,
         browserVersion: browser.version,
-        extensionVersion: Cloud.currentExtensionVersion() || "1.5.0",
-        capabilities: ["BOSS", "ZHILIAN"]
+        extensionVersion: Cloud.currentExtensionVersion() || "1.6.0",
+        capabilities: ["BOSS"]
       });
 
       if (!result.success || !result.data) {
@@ -220,9 +220,9 @@
           deviceName: device.deviceName || deviceName,
           browserName: device.browserName || browser.name,
           browserVersion: device.browserVersion || browser.version,
-          extensionVersion: device.extensionVersion || Cloud.currentExtensionVersion() || "1.5.0",
+          extensionVersion: device.extensionVersion || Cloud.currentExtensionVersion() || "1.6.0",
           status: device.status || "ACTIVE",
-          capabilities: device.capabilities || ["BOSS", "ZHILIAN"],
+          capabilities: device.capabilities || ["BOSS"],
           boundAt: device.boundAt || new Date().toISOString()
         }
       };

@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -561,10 +563,45 @@ class OpenAiMatchClientTest {
 
     @Test
     void sanitizesPiiForPromptRemovesSensitiveData() {
-        String text = "联系人李四，手机13912345678，email user@company.com";
+        String text = "联系人李四，手机13912345678，email user@company.com\n现住址：广东省深圳市南山区科技园1号1001室";
         String sanitized = OpenAiMatchClient.sanitizeForPrompt(text);
         assertThat(sanitized).contains("[手机号已隐藏]");
         assertThat(sanitized).contains("[邮箱已隐藏]");
+        assertThat(sanitized).contains("[详细住址已隐藏]");
+        assertThat(sanitized).doesNotContain("科技园1号1001室");
+    }
+
+    @Test
+    void sanitizesEveryDynamicPromptFieldBeforeNetworkSend() {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server.createContext("/chat/completions", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] bytes = """
+                    {"choices":[{"message":{"content":"{\\"score\\":80,\\"summary\\":\\"匹配\\"}"}}]}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        });
+        String phone = "13912345678";
+        String email = "secret@example.com";
+        AiMatchClient.MatchRequest request = new AiMatchClient.MatchRequest(
+                "Java工程师 " + phone,
+                "示例公司 " + email,
+                "联系地址：广东省深圳市南山区科技园1号1001室",
+                "手机" + phone + "，邮箱" + email,
+                List.of("后端 " + phone),
+                List.of("优先 " + email),
+                List.of("排除 " + phone),
+                List.of("详细地址：广东省深圳市福田区深南大道100号")
+        );
+
+        createClient().analyze(request);
+
+        assertThat(requestBody.get())
+                .doesNotContain(phone, email, "科技园1号1001室", "深南大道100号")
+                .contains("[手机号已隐藏]", "[邮箱已隐藏]", "[详细住址已隐藏]");
     }
 
     // ---- Helper methods ----
